@@ -107,7 +107,7 @@ function getMarzneshinServices($server_id) {
 function createMarzneshinUser($plan, $chat_id, $plan_id) {
     $server_id = $plan['server_id'];
     $service_id = $plan['marzneshin_service_id'];
-    $username = "user_{$chat_id}_" . time();
+    $username = $plan['full_username'];
     
     $stmt = pdo()->prepare("SELECT url, sub_host FROM servers WHERE id = ?");
     $stmt->execute([$server_id]);
@@ -141,12 +141,6 @@ function createMarzneshinUser($plan, $chat_id, $plan_id) {
         if (is_string($links_response_raw) && !str_contains(strtolower($links_response_raw), 'error')) {
             $links = explode("\n", trim($links_response_raw));
         }
-
-        saveUserService($chat_id, [
-            'server_id' => $server_id, 'username' => $new_username, 'plan_id' => $plan_id,
-            'sub_url' => $full_subscription_url, 'expire_timestamp' => strtotime($response['expire_date']),
-            'volume_gb' => $plan['volume_gb'],
-        ]);
 
         return [
             'username' => $new_username,

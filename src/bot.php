@@ -122,9 +122,147 @@ if (isset($update['callback_query'])) {
         ]);
         die;
     }
+    
+    // --- مدیریت پرداخت مستقیم برای خرید پلن ---
+    if (strpos($data, 'charge_for_plan_') === 0) {
+    $parts = explode('_', $data);
+    $amount_to_charge = (int)$parts[3];
+    $plan_id_to_buy = (int)$parts[4];
+    $discount_code_to_use = (isset($parts[5]) && !empty($parts[5])) ? $parts[5] : null;
+    $custom_name_encoded = $parts[6] ?? '';
+    $custom_name = base64_decode($custom_name_encoded);
+
+    $description = "تکمیل خرید پلن #{$plan_id_to_buy}";
+    $metadata = [
+        "purpose" => "complete_purchase",
+        "plan_id" => $plan_id_to_buy,
+        "user_id" => $chat_id,
+        "custom_name" => $custom_name // ذخیره نام دلخواه
+    ];
+    if ($discount_code_to_use) {
+        $metadata["discount_code"] = $discount_code_to_use;
+    }
+
+    $zarinpal_result = createZarinpalLink($chat_id, $amount_to_charge, $description, $metadata);
+    if ($zarinpal_result['success']) {
+        $message = "⏳ در حال انتقال به درگاه پرداخت... لطفا صبر کنید.";
+        $keyboard = ['inline_keyboard' => [[['text' => '🚀 ورود به صفحه پرداخت', 'url' => $zarinpal_result['url']]]]];
+        editMessageText($chat_id, $message_id, $message, $keyboard);
+    } else {
+        editMessageText($chat_id, $message_id, $zarinpal_result['error']);
+    }
+    die;
+}
+    elseif (strpos($data, 'manual_pay_for_plan_') === 0) {
+    $parts = explode('_', $data);
+    $amount_to_charge = (int)$parts[4];
+    $plan_id_to_buy = (int)$parts[5];
+    $discount_code_to_use = (isset($parts[6]) && !empty($parts[6])) ? $parts[6] : null;
+    $custom_name_encoded = $parts[7] ?? '';
+    $custom_name = base64_decode($custom_name_encoded);
+
+    $state_data = [
+        'charge_amount' => $amount_to_charge,
+        'purpose' => 'complete_purchase',
+        'plan_id' => $plan_id_to_buy,
+        'custom_name' => $custom_name, // ذخیره نام دلخواه در state
+    ];
+    if ($discount_code_to_use) {
+        $state_data['discount_code'] = $discount_code_to_use;
+    }
+
+    updateUserData($chat_id, 'awaiting_payment_screenshot', $state_data);
+
+    $settings = getSettings();
+    $payment_method = $settings['payment_method'];
+    $card_number_display = ($payment_method['copy_enabled'] ?? false) ? "<code>{$payment_method['card_number']}</code>" : $payment_method['card_number'];
+    $message = "برای تکمیل خرید به مبلغ <b>" . number_format($amount_to_charge) . " تومان</b>، لطفا مبلغ را به اطلاعات زیر واریز نمایید:\n\n" .
+               "💳 شماره کارت:\n" . $card_number_display . "\n" .
+               "👤 صاحب حساب: {$payment_method['card_holder']}\n\n" .
+               "پس از واریز، لطفا از رسید پرداخت خود اسکرین‌شات گرفته و در همینجا ارسال کنید. پس از تایید، سرویس شما به صورت خودکار ایجاد خواهد شد.";
+    editMessageText($chat_id, $message_id, $message);
+    die;
+}
 
     // --- دکمه‌های مخصوص ادمین‌ها ---
     if ($isAnAdmin) {
+        // --- بخش جدید: مدیریت کاربران از طریق دکمه شیشه‌ای ---
+        if (strpos($data, 'add_balance_') === 0 && hasPermission($chat_id, 'manage_users')) {
+            $target_id = str_replace('add_balance_', '', $data);
+            updateUserData($chat_id, 'admin_awaiting_amount_for_add_balance', ['target_user_id' => $target_id, 'admin_view' => 'admin']);
+            sendMessage($chat_id, "لطفا مبلغی که می‌خواهید به موجودی کاربر <code>$target_id</code> اضافه کنید را به تومان وارد کنید:", $cancelKeyboard);
+            apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
+            die;
+        }
+        elseif (strpos($data, 'show_user_services_') === 0 && hasPermission($chat_id, 'manage_users')) {
+            $target_id = str_replace('show_user_services_', '', $data);
+            $services = getUserServices($target_id);
+            
+            $target_user_info = getUserData($target_id);
+            $target_user_name = htmlspecialchars($target_user_info['first_name'] ?? "کاربر $target_id");
+            
+            if (empty($services)) {
+                apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => "کاربر {$target_user_name} هیچ سرویسی ندارد.", 'show_alert' => true]);
+            } else {
+                $message_text = "<b>لیست سرویس‌های کاربر: {$target_user_name}</b>\n\n";
+                $now = time();
+                foreach ($services as $service) {
+                    $expire_date = date('Y-m-d', $service['expire_timestamp']);
+                    $status_icon = $service['expire_timestamp'] < $now ? '❌' : '✅';
+                    $message_text .= "{$status_icon} <b>{$service['plan_name']}</b>\n";
+                    $message_text .= "▫️ نام کاربری پنل: <code>{$service['marzban_username']}</code>\n";
+                    $message_text .= "▫️ تاریخ انقضا: {$expire_date}\n---\n";
+                }
+                
+                // پیام را در یک پیام جدید ارسال می‌کنیم تا منوی مدیریت اصلی حفظ شود
+                sendMessage($chat_id, $message_text);
+                apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
+            }
+            die;
+        }
+        elseif (strpos($data, 'deduct_balance_') === 0 && hasPermission($chat_id, 'manage_users')) {
+            $target_id = str_replace('deduct_balance_', '', $data);
+            updateUserData($chat_id, 'admin_awaiting_amount_for_deduct_balance', ['target_user_id' => $target_id, 'admin_view' => 'admin']);
+            sendMessage($chat_id, "لطفا مبلغی که می‌خواهید از موجودی کاربر <code>$target_id</code> کسر کنید را به تومان وارد کنید:", $cancelKeyboard);
+            apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
+            die;
+        }
+        elseif (strpos($data, 'message_user_') === 0 && hasPermission($chat_id, 'manage_users')) {
+            $target_id = str_replace('message_user_', '', $data);
+            updateUserData($chat_id, 'admin_awaiting_message_for_user', ['target_user_id' => $target_id, 'admin_view' => 'admin']);
+            sendMessage($chat_id, "پیام خود را برای ارسال به کاربر <code>$target_id</code> وارد کنید:", $cancelKeyboard);
+            apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
+            die;
+        }
+        elseif (strpos($data, 'ban_user_') === 0 && hasPermission($chat_id, 'manage_users')) {
+            $target_id = str_replace('ban_user_', '', $data);
+            if ($target_id == ADMIN_CHAT_ID) {
+                apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '❌ شما نمی‌توانید خودتان را مسدود کنید!', 'show_alert' => true]);
+            } else {
+                setUserStatus($target_id, 'banned');
+                sendMessage($target_id, "شما توسط ادمین از ربات مسدود شده‌اید.");
+                editMessageText($chat_id, $message_id, $update['callback_query']['message']['text'] . "\n\n---\n✅ کاربر با موفقیت مسدود شد.");
+                apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => 'کاربر مسدود شد']);
+            }
+            die;
+        }
+        elseif (strpos($data, 'unban_user_') === 0 && hasPermission($chat_id, 'manage_users')) {
+            $target_id = str_replace('unban_user_', '', $data);
+            setUserStatus($target_id, 'active');
+            sendMessage($target_id, "✅ شما توسط ادمین از حالت مسدودیت خارج شدید.");
+            editMessageText($chat_id, $message_id, $update['callback_query']['message']['text'] . "\n\n---\n✅ کاربر با موفقیت آزاد شد.");
+            apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => 'کاربر آزاد شد']);
+            die;
+        }
+        elseif ($data === 'search_another_user' && hasPermission($chat_id, 'manage_users')) {
+            deleteMessage($chat_id, $message_id);
+            updateUserData($chat_id, 'admin_awaiting_user_search', ['admin_view' => 'admin']);
+            sendMessage($chat_id, "لطفاً شناسه عددی (Chat ID) کاربر بعدی را وارد کنید:", $cancelKeyboard);
+            apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
+            die;
+        }
+        // end
+        
         if (strpos($data, 'delete_cat_') === 0 && hasPermission($chat_id, 'manage_categories')) {
             $cat_id = str_replace('delete_cat_', '', $data);
             pdo()
@@ -485,21 +623,64 @@ if (isset($update['callback_query'])) {
             $user_id_to_charge = $request['user_id'];
             $amount_to_charge = $request['amount'];
             $admin_who_processed = $update['callback_query']['from']['id'];
+            $metadata = json_decode($request['metadata'], true);
 
             if ($action == 'approve') {
-                $stmt = pdo()->prepare("UPDATE payment_requests SET status = 'approved', processed_by_admin_id = ?, processed_at = NOW() WHERE id = ?");
-                $stmt->execute([$admin_who_processed, $request_id]);
+                pdo()->prepare("UPDATE payment_requests SET status = 'approved', processed_by_admin_id = ?, processed_at = NOW() WHERE id = ?")->execute([$admin_who_processed, $request_id]);
 
-                updateUserBalance($user_id_to_charge, $amount_to_charge, 'add');
-                $new_balance_data = getUserData($user_id_to_charge, '');
-                sendMessage($user_id_to_charge, "✅ حساب شما به مبلغ " . number_format($amount_to_charge) . " تومان شارژ شد.\nموجودی جدید: " . number_format($new_balance_data['balance']) . " تومان");
+                if (isset($metadata['purpose']) && $metadata['purpose'] === 'complete_purchase') {
+                    // این پرداخت برای تکمیل خرید یک پلن
+                    $plan_id = $metadata['plan_id'];
+                    $discount_code = $metadata['discount_code'] ?? null;
+                    
+                    $plan = getPlanById($plan_id);
+                    $final_price = (float)$plan['price'];
+                    $discount_applied = false;
+                    $discount_object = null;
+
+                    if ($discount_code) {
+                        $stmt_discount = pdo()->prepare("SELECT * FROM discount_codes WHERE code = ?");
+                        $stmt_discount->execute([$discount_code]);
+                        $discount_object = $stmt_discount->fetch();
+                        if ($discount_object) {
+                             if ($discount_object['type'] == 'percent') {
+                                $final_price = $plan['price'] - ($plan['price'] * $discount_object['value']) / 100;
+                            } else {
+                                $final_price = $plan['price'] - $discount_object['value'];
+                            }
+                            $final_price = max(0, $final_price);
+                            $discount_applied = true;
+                        }
+                    }
+                    
+                    // شارژ موقت حساب کاربر با مبلغ پرداختی
+                    updateUserBalance($user_id_to_charge, $amount_to_charge, 'add');
+
+                    $custom_name = $metadata['custom_name'] ?? 'سرویس'; 
+$purchase_result = completePurchase($user_id_to_charge, $plan_id, $custom_name, $final_price, $discount_code, $discount_object, $discount_applied);
+
+                    if ($purchase_result['success']) {
+                        sendPhoto($user_id_to_charge, $purchase_result['qr_code_url'], $purchase_result['caption']);
+                        sendMessage(ADMIN_CHAT_ID, $purchase_result['admin_notification']);
+                        sendMessage($user_id_to_charge, "✅ پرداخت شما تایید و سرویس با موفقیت ایجاد شد.");
+                    } else {
+                         sendMessage($user_id_to_charge, "❌ پرداخت شما تایید شد اما در ایجاد سرویس خطایی رخ داد. مبلغ پرداخت شده به موجودی شما اضافه شد. لطفاً با پشتیبانی تماس بگیرید.");
+                    }
+                    updateUserData($user_id_to_charge, 'main_menu');
+
+                } else {
+                    // پرداخت برای شارژ عادی حساب بوده است
+                    updateUserBalance($user_id_to_charge, $amount_to_charge, 'add');
+                    $new_balance_data = getUserData($user_id_to_charge);
+                    sendMessage($user_id_to_charge, "✅ حساب شما به مبلغ " . number_format($amount_to_charge) . " تومان شارژ شد.\nموجودی جدید: " . number_format($new_balance_data['balance']) . " تومان");
+                }
 
                 editMessageCaption($chat_id, $message_id, $update['callback_query']['message']['caption'] . "\n\n<b>✅ توسط شما تایید شد.</b>", null);
-                apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ شارژ تایید شد']);
+                apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ درخواست تایید شد']);
+
             }
             elseif ($action == 'reject') {
-                $stmt = pdo()->prepare("UPDATE payment_requests SET status = 'rejected', processed_by_admin_id = ?, processed_at = NOW() WHERE id = ?");
-                $stmt->execute([$admin_who_processed, $request_id]);
+                pdo()->prepare("UPDATE payment_requests SET status = 'rejected', processed_by_admin_id = ?, processed_at = NOW() WHERE id = ?")->execute([$admin_who_processed, $request_id]);
 
                 sendMessage($user_id_to_charge, "❌ درخواست شارژ حساب شما به مبلغ " . number_format($amount_to_charge) . " تومان توسط ادمین رد شد.");
 
@@ -528,6 +709,36 @@ if (isset($update['callback_query'])) {
             ]];
             editMessageText($chat_id, $message_id, "لطفا نوع پنل سرور را انتخاب کنید:", $keyboard);
         }
+        elseif (strpos($data, 'edit_protocols_') === 0 && hasPermission($chat_id, 'manage_marzban')) {
+            $server_id = str_replace('edit_protocols_', '', $data);
+            showMarzbanProtocolEditor($chat_id, $message_id, $server_id);
+            apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
+        }
+        elseif (strpos($data, 'toggle_protocol_') === 0 && hasPermission($chat_id, 'manage_marzban')) {
+            preg_match('/toggle_protocol_(\d+)_(\w+)/', $data, $matches);
+            $server_id = $matches[1];
+            $protocol = $matches[2];
+            
+            $stmt_get = pdo()->prepare("SELECT marzban_protocols FROM servers WHERE id = ?");
+            $stmt_get->execute([$server_id]);
+            $protocols_json = $stmt_get->fetchColumn();
+            
+            $current_protocols = $protocols_json ? json_decode($protocols_json, true) : [];
+            if (!is_array($current_protocols)) $current_protocols = [];
+
+            if (in_array($protocol, $current_protocols)) {
+                $current_protocols = array_diff($current_protocols, [$protocol]);
+            } else {
+                $current_protocols[] = $protocol;
+            }
+            
+            $new_protocols_json = json_encode(array_values($current_protocols));
+            $stmt_update = pdo()->prepare("UPDATE servers SET marzban_protocols = ? WHERE id = ?");
+            $stmt_update->execute([$new_protocols_json, $server_id]);
+            
+            showMarzbanProtocolEditor($chat_id, $message_id, $server_id);
+            apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
+        }
         elseif (strpos($data, 'add_server_type_') === 0 && hasPermission($chat_id, 'manage_marzban')) {
             deleteMessage($chat_id, $message_id);
             $type = str_replace('add_server_type_', '', $data);
@@ -550,11 +761,15 @@ if (isset($update['callback_query'])) {
                 
                 $keyboard_buttons = [];
                 
-                // دکمه ویرایش آدرس ساب برای سرورهای مرزبان و سنایی نمایش داده می‌شود
+                
                 if ($server['type'] === 'sanaei' || $server['type'] === 'marzban') {
                     $sub_host_text = !empty($server['sub_host']) ? "<code>{$server['sub_host']}</code>" : "<i>پیش‌فرض (مانند آدرس پنل)</i>";
                     $msg .= "▫️ آدرس لینک اشتراک: {$sub_host_text}\n";
                     $keyboard_buttons[] = [['text' => '🔗 ویرایش آدرس ساب', 'callback_data' => "edit_sub_host_{$server_id}"]];
+                }
+                
+                if ($server['type'] === 'marzban') {
+                    $keyboard_buttons[] = [['text' => '⚙️ تنظیم پروتکل‌ها', 'callback_data' => "edit_protocols_{$server_id}"]];
                 }
                 
                 $msg .= "▫️ نام کاربری: <code>{$server['username']}</code>\n";
@@ -1017,6 +1232,31 @@ if (isset($update['callback_query'])) {
     }
 
     // --- دکمه‌های عمومی کاربران ---
+    elseif (strpos($data, 'get_configs_') === 0) {
+        $username = str_replace('get_configs_', '', $data);
+        
+        $stmt_service = pdo()->prepare("SELECT server_id FROM services WHERE owner_chat_id = ? AND marzban_username = ?");
+        $stmt_service->execute([$chat_id, $username]);
+        $server_id = $stmt_service->fetchColumn();
+
+        if (!$server_id) {
+            apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '❌ سرویس یافت نشد.', 'show_alert' => true]);
+            die;
+        }
+
+        $panel_user = getPanelUser($username, $server_id);
+        
+        if ($panel_user && !empty($panel_user['links'])) {
+            // --- ارسال مستقیم همه کانفیگ‌ها ---
+            $all_links_text = implode("\n\n", $panel_user['links']);
+            sendMessage($chat_id, "<b>تمام کانفیگ‌های شما (برای کپی آسان):</b>\n\nبا کلیک روی متن زیر، تمام لینک‌ها به صورت خودکار کپی می‌شوند.\n\n<code>" . htmlspecialchars($all_links_text) . "</code>");
+            apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '✅ تمام کانفیگ‌ها برای شما ارسال شد!']);
+
+        } else {
+            apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '❌ هیچ لینک کانفیگی برای این سرویس یافت نشد.', 'show_alert' => true]);
+        }
+        die;
+    }
     elseif (strpos($data, 'show_guide_') === 0) {
         $guide_id = str_replace('show_guide_', '', $data);
         $stmt = pdo()->prepare("SELECT * FROM guides WHERE id = ? AND status = 'active'");
@@ -1042,11 +1282,21 @@ if (isset($update['callback_query'])) {
     elseif (strpos($data, 'charge_manual_') === 0) {
         $amount = (int)str_replace('charge_manual_', '', $data);
         $settings = getSettings();
-        $payment_method = $settings['payment_method'];
-        $card_number_display = $payment_method['copy_enabled'] ? "<code>{$payment_method['card_number']}</code>" : $payment_method['card_number'];
+        $payment_method = $settings['payment_method'] ?? [];
+        $card_number = $payment_method['card_number'] ?? '';
+        $card_holder = $payment_method['card_holder'] ?? '';
+        $copy_enabled = $payment_method['copy_enabled'] ?? false;
+
+        if (empty($card_number)) {
+             editMessageText($chat_id, $message_id, "❌ روش پرداخت دستی توسط ادمین تنظیم نشده است.");
+             apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
+             die;
+        }
+
+        $card_number_display = $copy_enabled ? "<code>{$card_number}</code>" : $card_number;
         $message = "برای شارژ حساب به مبلغ <b>" . number_format($amount) . " تومان</b>، لطفا مبلغ را به اطلاعات زیر واریز نمایید:\n\n" .
                    "💳 شماره کارت:\n" . $card_number_display . "\n" .
-                   "👤 صاحب حساب: {$payment_method['card_holder']}\n\n" .
+                   "👤 صاحب حساب: {$card_holder}\n\n" .
                    "پس از واریز، لطفا از رسید پرداخت خود اسکرین‌شات گرفته و در همینجا ارسال کنید.";
         editMessageText($chat_id, $message_id, $message);
         updateUserData($chat_id, 'awaiting_payment_screenshot', ['charge_amount' => $amount]);
@@ -1075,135 +1325,43 @@ if (isset($update['callback_query'])) {
         apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
     }
     elseif (strpos($data, 'buy_plan_') === 0) {
-        $parts = explode('_', $data);
-        $plan_id = $parts[2];
-        $discount_code = null;
-        if (isset($parts[5]) && $parts[3] == 'with' && $parts[4] == 'code') {
-            $discount_code = strtoupper($parts[5]);
-        }
-        $plan = getPlanById($plan_id);
-        if (!$plan) {
-            apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '❌ خطا: پلن یافت نشد.']);
-            die;
-        }
-
-        if ($plan['purchase_limit'] > 0 && $plan['purchase_count'] >= $plan['purchase_limit']) {
-            apiRequest('answerCallbackQuery', [
-                'callback_query_id' => $callback_id,
-                'text' => '❌ متاسفانه ظرفیت خرید این پلن به اتمام رسیده است.',
-                'show_alert' => true,
-            ]);
-            die;
-        }
-
-        $final_price = (float)$plan['price'];
-        $discount_applied = false;
-        $discount_object = null;
-        if ($discount_code) {
-            $stmt = pdo()->prepare("SELECT * FROM discount_codes WHERE code = ? AND status = 'active' AND usage_count < max_usage");
-            $stmt->execute([$discount_code]);
-            $discount = $stmt->fetch();
-            if ($discount) {
-                if ($discount['type'] == 'percent') {
-                    $final_price = $plan['price'] - ($plan['price'] * $discount['value']) / 100;
-                }
-                else {
-                    $final_price = $plan['price'] - $discount['value'];
-                }
-                $final_price = max(0, $final_price);
-                $discount_applied = true;
-                $discount_object = $discount;
-            }
-            else {
-                apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '❌ کد تخفیف نامعتبر یا منقضی شده است.', 'show_alert' => true]);
-                die;
-            }
-        }
-        $current_user_data = getUserData($from_id, $first_name);
-        if ($current_user_data['balance'] >= $final_price) {
-            editMessageText($chat_id, $message_id, "⏳ لطفا صبر کنید... در حال ایجاد سرویس شما هستیم.");
-            $panel_user_data = createPanelUser($plan, $from_id, $plan_id);
-            if ($panel_user_data && isset($panel_user_data['username'])) {
-                if ($plan['is_test_plan'] == 1) {
-                    pdo()
-                        ->prepare("UPDATE users SET test_config_count = test_config_count + 1 WHERE chat_id = ?")
-                        ->execute([$from_id]);
-                }
-                else {
-                    updateUserBalance($from_id, $final_price, 'deduct');
-                }
-
-                if ($plan['purchase_limit'] > 0) {
-                    pdo()
-                        ->prepare("UPDATE plans SET purchase_count = purchase_count + 1 WHERE id = ?")
-                        ->execute([$plan_id]);
-                }
-
-                if ($discount_applied) {
-                    $stmt = pdo()->prepare("UPDATE discount_codes SET usage_count = usage_count + 1 WHERE id = ?");
-                    $stmt->execute([$discount_object['id']]);
-                }
-                $new_balance = $current_user_data['balance'] - $final_price;
-                
-                // --- بخش جدید: ساخت QR Code و کپشن ---
-                $sub_link = $panel_user_data['subscription_url'];
-                $qr_code_url = generateQrCodeUrl($sub_link);
-
-                $caption = "✅ <b>خرید شما با موفقیت انجام شد.</b>\n";
-                if ($discount_applied) {
-                    $caption .= "🏷 قیمت اصلی: " . number_format($plan['price']) . " تومان\n";
-                    $caption .= "💰 قیمت با تخفیف: <b>" . number_format($final_price) . " تومان</b>\n";
-                }
-                $caption .= "\n▫️ نام پلن: <b>{$plan['name']}</b>\n\n";
-
-                $show_sub = $plan['show_sub_link'];
-                $show_conf = $plan['show_conf_links'];
-                $conf_links = $panel_user_data['links'] ?? [];
-                $links_message = '';
-
-                if ($show_sub) {
-                    $links_message .= "🔗 لینک اشتراک (Subscription):\n<code>" . htmlspecialchars($sub_link) . "</code>\n\n";
-                }
-                if ($show_conf && !empty($conf_links)) {
-                    $links_message .= "🔗 لینک‌های کانفیگ:\n";
-                    foreach ($conf_links as $link) {
-                        $links_message .= "<code>" . htmlspecialchars($link) . "</code>\n";
-                    }
-                    $links_message .= "\n";
-                }
-                if (empty(trim($links_message))) {
-                    $links_message = "🔗 لینک‌های این سرویس برای شما نمایش داده نمی‌شود. برای مشاهده به بخش «سرویس‌های من» مراجعه کنید.\n\n";
-                }
-
-                $caption .= trim($links_message) . "\n\n💰 موجودی جدید شما: " . number_format($new_balance) . " تومان";
-
-                // حذف پیام "لطفا صبر کنید..."
-                deleteMessage($chat_id, $message_id);
-                // ارسال QR Code به همراه کپشن
-                sendPhoto($chat_id, $qr_code_url, $caption);
-
-                $admin_notification = "✅ <b>خرید جدید</b>\n\n";
-                $admin_notification .= "👤 کاربر: " . htmlspecialchars($first_name) . " (<code>$from_id</code>)\n";
-                $admin_notification .= "🛍️ پلن: {$plan['name']}\n";
-                if ($discount_applied) {
-                    $admin_notification .= "💵 قیمت اصلی: " . number_format($plan['price']) . " تومان\n";
-                    $admin_notification .= "🏷 کد تخفیف: <code>{$discount_code}</code>\n";
-                    $admin_notification .= "💳 مبلغ پرداخت شده: <b>" . number_format($final_price) . " تومان</b>";
-                }
-                else {
-                    $admin_notification .= "💳 مبلغ پرداخت شده: " . number_format($final_price) . " تومان";
-                }
-                sendMessage(ADMIN_CHAT_ID, $admin_notification);
-            }
-            else {
-                editMessageText($chat_id, $message_id, "❌ متاسفانه در ایجاد سرویس شما مشکلی پیش آمد. لطفا با پشتیبانی تماس بگیرید. مبلغی از حساب شما کسر نشده است.");
-                sendMessage(ADMIN_CHAT_ID, "⚠️ <b>خطای ساخت سرویس</b>\n\nکاربر با شناسه <code>$from_id</code> قصد خرید پلن '{$plan['name']}' را داشت اما ارتباط با پنل ناموفق بود. لطفا لاگ‌ها و تنظیمات سرور مربوطه را بررسی کنید.");
-            }
-        }
-        else {
-            apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '❌ موجودی حساب شما کافی نیست!', 'show_alert' => true]);
-        }
+    $parts = explode('_', $data);
+    $plan_id = $parts[2];
+    $discount_code = null;
+    if (isset($parts[5]) && $parts[3] == 'with' && $parts[4] == 'code') {
+        $discount_code = strtoupper($parts[5]);
     }
+    
+    $plan = getPlanById($plan_id);
+    if (!$plan) {
+        apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id, 'text' => '❌ خطا: پلن یافت نشد.']);
+        die;
+    }
+
+    if ($plan['purchase_limit'] > 0 && $plan['purchase_count'] >= $plan['purchase_limit']) {
+        apiRequest('answerCallbackQuery', [
+            'callback_query_id' => $callback_id,
+            'text' => '❌ متاسفانه ظرفیت خرید این پلن به اتمام رسیده است.',
+            'show_alert' => true,
+        ]);
+        die;
+    }
+
+    // به جای خرید مستقیم، وضعیت را برای دریافت نام تنظیم می‌کنیم
+    $state_data = [
+        'purchasing_plan_id' => $plan_id,
+        'discount_code' => $discount_code
+    ];
+    updateUserData($chat_id, 'awaiting_service_name', $state_data);
+    
+    $message = "✅ پلن انتخاب شد.\n\nلطفاً یک نام دلخواه برای این سرویس وارد کنید (مثلاً: سرویس شخصی). این نام در لیست سرویس‌های شما نمایش داده خواهد شد.";
+    
+  
+    deleteMessage($chat_id, $message_id);
+    sendMessage($chat_id, $message, $cancelKeyboard);
+    apiRequest('answerCallbackQuery', ['callback_query_id' => $callback_id]);
+    die;
+}
     elseif ($data === 'confirm_renewal_payment') {
         $state_data = $user_data['state_data'];
         $total_cost = $state_data['renewal_total_cost'];
@@ -1223,13 +1381,13 @@ if (isset($update['callback_query'])) {
                 editMessageText($chat_id, $message_id, $success_msg);
             } else {
                 editMessageText($chat_id, $message_id, "❌ خطایی در تمدید سرویس رخ داد: " . $result['message']);
-                // بازگرداندن پول
+                
                 updateUserBalance($chat_id, $total_cost, 'add');
             }
             updateUserData($chat_id, 'main_menu');
 
         } else {
-            // ارسال برای ادمین (پرداخت کارت به کارت)
+            
             $stmt = pdo()->prepare(
                 "INSERT INTO renewal_requests (user_id, service_username, days_to_add, gb_to_add, total_cost) VALUES (?, ?, ?, ?, ?)"
             );
@@ -1239,16 +1397,19 @@ if (isset($update['callback_query'])) {
             $state_data['renewal_request_id'] = $request_id;
             updateUserData($chat_id, 'awaiting_renewal_screenshot', $state_data);
 
-            // نمایش اطلاعات کارت به کاربر
+           
             $settings = getSettings();
-            $payment_method = $settings['payment_method'] ?? null;
-            if (!$payment_method || empty($payment_method['card_number'])) {
+            $payment_method = $settings['payment_method'] ?? [];
+            if (empty($payment_method['card_number'])) {
                 editMessageText($chat_id, $message_id, "موجودی شما کافی نیست و روش پرداخت کارت به کارت نیز توسط ادمین تنظیم نشده است. لطفا ابتدا حساب خود را شارژ کنید.");
             } else {
-                 $card_number_display = $payment_method['copy_enabled'] ? "<code>{$payment_method['card_number']}</code>" : $payment_method['card_number'];
+                 $card_number = $payment_method['card_number'] ?? '';
+                 $card_holder = $payment_method['card_holder'] ?? '';
+                 $copy_enabled = $payment_method['copy_enabled'] ?? false;
+                 $card_number_display = $copy_enabled ? "<code>{$card_number}</code>" : $card_number;
                  $message = "موجودی شما کافی نیست. لطفا مبلغ <b>" . number_format($total_cost) . " تومان</b> را به اطلاعات زیر واریز کرده و سپس اسکرین‌شات رسید را ارسال کنید:\n\n" .
                             "💳 شماره کارت:\n" . $card_number_display . "\n" .
-                            "👤 صاحب حساب: {$payment_method['card_holder']}";
+                            "👤 صاحب حساب: {$card_holder}";
                  editMessageText($chat_id, $message_id, $message);
             }
         }
@@ -1264,95 +1425,93 @@ if (isset($update['callback_query'])) {
         sendMessage($chat_id, "لطفا یکی از دسته‌بندی‌های زیر را انتخاب کنید:", ['inline_keyboard' => $keyboard_buttons]);
     }
             elseif (strpos($data, 'service_details_') === 0) {
-            $username = str_replace('service_details_', '', $data);
-            if (isset($update['callback_query']['message']['photo'])) {
-                editMessageCaption($chat_id, $message_id, "⏳ در حال دریافت اطلاعات به‌روز سرویس، لطفا صبر کنید...");
-            } else {
-                editMessageText($chat_id, $message_id, "⏳ در حال دریافت اطلاعات به‌روز سرویس، لطفا صبر کنید...");
-            }
-
-            $stmt_local = pdo()->prepare("SELECT s.*, p.name as plan_name, p.show_sub_link, p.show_conf_links FROM services s JOIN plans p ON s.plan_id = p.id WHERE s.owner_chat_id = ? AND s.marzban_username = ?");
-            $stmt_local->execute([$chat_id, $username]);
-            $local_service = $stmt_local->fetch();
-
-            if ($local_service) {
-                //  --- بخش جدید و هوشمند برای ساخت دینامیک لینک اشتراک ---
-                $stmt_server = pdo()->prepare("SELECT * FROM servers WHERE id = ?");
-                $stmt_server->execute([$local_service['server_id']]);
-                $server_info = $stmt_server->fetch();
-
-                                $dynamic_sub_url = $local_service['sub_url'];
-                if ($server_info) {
-                    $base_sub_url = !empty($server_info['sub_host']) ? rtrim($server_info['sub_host'], '/') : rtrim($server_info['url'], '/');
-                    
-                   
-                    $sub_path = strstr($local_service['sub_url'], '/sub/');
-                    if ($sub_path === false) { 
-                        $sub_path = parse_url($local_service['sub_url'], PHP_URL_PATH);
-                    }
-                    
-                    $dynamic_sub_url = $base_sub_url . $sub_path;
-                }
-
-                $panel_user = getPanelUser($username, $local_service['server_id']);
-
-                if ($panel_user && !isset($panel_user['detail'])) {
-                    $qr_code_url = generateQrCodeUrl($dynamic_sub_url);
-                    
-                    //  --- بخش جدید و هوشمند برای محاسبه حجم ---
-                    $total_gb_from_db = $local_service['volume_gb'];
-                    $used_bytes_from_panel = $panel_user['used_traffic'];
-                    
-                    $total_text = ($total_gb_from_db > 0) ? "{$total_gb_from_db} گیگابایت" : 'نامحدود';
-                    $used_text = formatBytes($used_bytes_from_panel);
-                    
-                    $remaining_text = 'نامحدود';
-                    if ($total_gb_from_db > 0) {
-                        $total_bytes_from_db = $total_gb_from_db * 1024 * 1024 * 1024;
-                        $remaining_bytes = $total_bytes_from_db - $used_bytes_from_panel;
-                        $remaining_text = formatBytes(max(0, $remaining_bytes));
-                    }
-
-                    $expire_date = $panel_user['expire'] ? date('Y-m-d', $panel_user['expire']) : 'نامحدود';
-                    $status_text = ($panel_user['status'] === 'active' && ($panel_user['expire'] == 0 || $panel_user['expire'] > time())) ? 'فعال' : 'غیرفعال';
-
-                    $caption =
-                        "<b>مشخصات سرویس: {$local_service['plan_name']}</b>\n" .
-                        "➖➖➖➖➖➖➖➖➖➖\n" .
-                        "▫️ وضعیت: <b>{$status_text}</b>\n" .
-                        "🗓 تاریخ انقضا: <b>{$expire_date}</b>\n\n" .
-                        "📊 حجم کل: " . $total_text . "\n" .
-                        "📈 حجم مصرفی: " . $used_text . "\n" .
-                        "📉 حجم باقی‌مانده: " . $remaining_text . "\n" .
-                        "➖➖➖➖➖➖➖➖➖➖\n";
-                        
-                    if ($local_service['show_sub_link']) {
-                        $caption .= "\n🔗 لینک اشتراک (Subscription):\n<code>" . htmlspecialchars($dynamic_sub_url) . "</code>\n";
-                    } else {
-                        $caption .= "\n🔗 لینک اشتراک برای این پلن نمایش داده نمی‌شود.\n";
-                    }
-                    if ($local_service['show_conf_links'] && !empty($panel_user['links'])) {
-                        $caption .= "\n🔗 لینک‌های کانفیگ:\n";
-                        foreach ($panel_user['links'] as $link) {
-                            $caption .= "<code>" . htmlspecialchars($link) . "</code>\n";
-                        }
-                    }
-                    $keyboard = [
-                        'inline_keyboard' => [
-                            [['text' => '♻️ تمدید سرویس', 'callback_data' => "renew_service_{$username}"]],
-                            [['text' => '🗑 حذف سرویس', 'callback_data' => "delete_service_confirm_{$username}"]],
-                            [['text' => '◀️ بازگشت به لیست', 'callback_data' => 'back_to_services']],
-                        ],
-                    ];
-                    deleteMessage($chat_id, $message_id);
-                    sendPhoto($chat_id, $qr_code_url, trim($caption), $keyboard);
+                $username = str_replace('service_details_', '', $data);
+                if (isset($update['callback_query']['message']['photo'])) {
+                    editMessageCaption($chat_id, $message_id, "⏳ در حال دریافت اطلاعات به‌روز سرویس، لطفا صبر کنید...");
                 } else {
-                    editMessageText($chat_id, $message_id, "❌ خطایی در دریافت اطلاعات سرویس از سرور رخ داد یا سرویس یافت نشد. ممکن است توسط ادمین حذف شده باشد.");
+                    editMessageText($chat_id, $message_id, "⏳ در حال دریافت اطلاعات به‌روز سرویس، لطفا صبر کنید...");
                 }
-            } else {
-                editMessageText($chat_id, $message_id, "❌ سرویس در دیتابیس ربات یافت نشد.");
+
+                $stmt_local = pdo()->prepare("SELECT s.*, p.name as plan_name, p.show_sub_link, p.show_conf_links FROM services s JOIN plans p ON s.plan_id = p.id WHERE s.owner_chat_id = ? AND s.marzban_username = ?");
+                $stmt_local->execute([$chat_id, $username]);
+                $local_service = $stmt_local->fetch();
+
+                if ($local_service) {
+                    $stmt_server = pdo()->prepare("SELECT * FROM servers WHERE id = ?");
+                    $stmt_server->execute([$local_service['server_id']]);
+                    $server_info = $stmt_server->fetch();
+
+                    $dynamic_sub_url = $local_service['sub_url'];
+                    if ($server_info) {
+                        $base_sub_url = !empty($server_info['sub_host']) ? rtrim($server_info['sub_host'], '/') : rtrim($server_info['url'], '/');
+                        $sub_path = strstr($local_service['sub_url'], '/sub/');
+                        if ($sub_path === false) { 
+                            $sub_path = parse_url($local_service['sub_url'], PHP_URL_PATH);
+                        }
+                        $dynamic_sub_url = $base_sub_url . $sub_path;
+                    }
+
+                    $panel_user = getPanelUser($username, $local_service['server_id']);
+
+                    if ($panel_user && !isset($panel_user['detail'])) {
+                        $qr_code_url = generateQrCodeUrl($dynamic_sub_url);
+                        
+                        $total_gb_from_db = $local_service['volume_gb'];
+                        $used_bytes_from_panel = $panel_user['used_traffic'];
+                        
+                        $total_text = ($total_gb_from_db > 0) ? "{$total_gb_from_db} گیگابایت" : 'نامحدود';
+                        $used_text = formatBytes($used_bytes_from_panel);
+                        
+                        $remaining_text = 'نامحدود';
+                        if ($total_gb_from_db > 0) {
+                            $total_bytes_from_db = $total_gb_from_db * 1024 * 1024 * 1024;
+                            $remaining_bytes = $total_bytes_from_db - $used_bytes_from_panel;
+                            $remaining_text = formatBytes(max(0, $remaining_bytes));
+                        }
+
+                        $expire_date = $panel_user['expire'] ? date('Y-m-d', $panel_user['expire']) : 'نامحدود';
+                        $status_text = ($panel_user['status'] === 'active' && ($panel_user['expire'] == 0 || $panel_user['expire'] > time())) ? 'فعال' : 'غیرفعال';
+
+                        $caption =
+                            "<b>مشخصات سرویس: {$local_service['plan_name']}</b>\n" .
+                            "➖➖➖➖➖➖➖➖➖➖\n" .
+                            "▫️ وضعیت: <b>{$status_text}</b>\n" .
+                            "🗓 تاریخ انقضا: <b>{$expire_date}</b>\n\n" .
+                            "📊 حجم کل: " . $total_text . "\n" .
+                            "📈 حجم مصرفی: " . $used_text . "\n" .
+                            "📉 حجم باقی‌مانده: " . $remaining_text . "\n" .
+                            "➖➖➖➖➖➖➖➖➖➖\n";
+                            
+                        if ($local_service['show_sub_link']) {
+                            $caption .= "\n🔗 لینک اشتراک (Subscription):\n<code>" . htmlspecialchars($dynamic_sub_url) . "</code>\n";
+                        } else {
+                            $caption .= "\n🔗 لینک اشتراک برای این پلن نمایش داده نمی‌شود.\n";
+                        }
+
+         
+                        $keyboard_buttons = [
+                            [['text' => '♻️ تمدید سرویس', 'callback_data' => "renew_service_{$username}"]],
+                        ];
+
+                        if ($local_service['show_conf_links'] && !empty($panel_user['links'])) {
+                             $keyboard_buttons[0][] = ['text' => '📋 دریافت کانفیگ‌ها', 'callback_data' => "get_configs_{$username}"];
+                        }
+                        
+                        $keyboard_buttons[] = [['text' => '🗑 حذف سرویس', 'callback_data' => "delete_service_confirm_{$username}"]];
+                        $keyboard_buttons[] = [['text' => '◀️ بازگشت به لیست', 'callback_data' => 'back_to_services']];
+                     
+
+                        $keyboard = ['inline_keyboard' => $keyboard_buttons];
+
+                        deleteMessage($chat_id, $message_id);
+                        sendPhoto($chat_id, $qr_code_url, trim($caption), $keyboard);
+                    } else {
+                        editMessageText($chat_id, $message_id, "❌ خطایی در دریافت اطلاعات سرویس از سرور رخ داد یا سرویس یافت نشد. ممکن است توسط ادمین حذف شده باشد.");
+                    }
+                } else {
+                    editMessageText($chat_id, $message_id, "❌ سرویس در دیتابیس ربات یافت نشد.");
+                }
             }
-        }
     elseif (strpos($data, 'renew_service_') === 0) {
         $settings = getSettings();
         if (($settings['renewal_status'] ?? 'off') !== 'on') {
@@ -1462,9 +1621,21 @@ if (isset($update['message']) || USER_INLINE_KEYBOARD) {
             $amount = $state_data['charge_amount'];
             $user_id = $update['message']['from']['id'];
             $photo_id = $update['message']['photo'][count($update['message']['photo']) - 1]['file_id'];
+            
+            // --- آماده‌سازی metadata ---
+            $metadata_to_save = null;
+            if (isset($state_data['purpose']) && $state_data['purpose'] === 'complete_purchase') {
+                $metadata_to_save = json_encode([
+    'purpose' => 'complete_purchase',
+    'plan_id' => $state_data['plan_id'],
+    'discount_code' => $state_data['discount_code'] ?? null,
+    'custom_name' => $state_data['custom_name'] ?? 'سرویس' // اضافه کردن نام دلخواه
+]);
+}
+     
 
-            $stmt = pdo()->prepare("INSERT INTO payment_requests (user_id, amount, photo_file_id) VALUES (?, ?, ?)");
-            $stmt->execute([$user_id, $amount, $photo_id]);
+            $stmt = pdo()->prepare("INSERT INTO payment_requests (user_id, amount, photo_file_id, metadata) VALUES (?, ?, ?, ?)");
+            $stmt->execute([$user_id, $amount, $photo_id, $metadata_to_save]);
             $request_id = pdo()->lastInsertId();
 
             $caption = "<b>درخواست شارژ حساب جدید</b>\n\n" . "👤 کاربر: " . htmlspecialchars($first_name) . "\n" . "🆔 شناسه: <code>$user_id</code>\n" . "💰 مبلغ: " . number_format($amount) . " تومان\n" . "▫️ شماره درخواست: #{$request_id}";
@@ -1568,6 +1739,156 @@ if (isset($update['message']) || USER_INLINE_KEYBOARD) {
 
     if ($user_state !== 'main_menu') {
         switch ($user_state) {
+            
+            case 'awaiting_service_name':
+    $custom_name = trim($text);
+    if (empty($custom_name) || mb_strlen($custom_name) > 50) {
+        sendMessage($chat_id, "❌ نام وارد شده نامعتبر است. لطفاً یک نام کوتاه‌تر (حداکثر 50 کاراکتر) وارد کنید.", $cancelKeyboard);
+        break;
+    }
+
+    $state_data = $user_data['state_data'];
+    $plan_id = $state_data['purchasing_plan_id'];
+    $discount_code = $state_data['discount_code'] ?? null;
+    
+    $plan = getPlanById($plan_id);
+    if (!$plan) {
+        sendMessage($chat_id, "❌ خطایی رخ داد. پلن یافت نشد.");
+        updateUserData($chat_id, 'main_menu');
+        break;
+    }
+
+    // --- کپی کردن منطق بررسی موجودی و قیمت نهایی از کد قبلی ---
+    $final_price = (float)$plan['price'];
+    $discount_applied = false;
+    $discount_object = null;
+    if ($discount_code) {
+        $stmt = pdo()->prepare("SELECT * FROM discount_codes WHERE code = ? AND status = 'active' AND usage_count < max_usage");
+        $stmt->execute([$discount_code]);
+        $discount = $stmt->fetch();
+        if ($discount) {
+            if ($discount['type'] == 'percent') {
+                $final_price = $plan['price'] - ($plan['price'] * $discount['value']) / 100;
+            } else {
+                $final_price = $plan['price'] - $discount['value'];
+            }
+            $final_price = max(0, $final_price);
+            $discount_applied = true;
+            $discount_object = $discount;
+        }
+    }
+    
+    $user_balance = $user_data['balance'];
+
+    if ($user_balance >= $final_price) {
+        sendMessage($chat_id, "⏳ نام سرویس تایید شد. لطفاً صبر کنید... در حال ایجاد سرویس شما هستیم.");
+        $purchase_result = completePurchase($chat_id, $plan_id, $custom_name, $final_price, $discount_code, $discount_object, $discount_applied);
+        
+        if ($purchase_result['success']) {
+            sendPhoto($chat_id, $purchase_result['qr_code_url'], $purchase_result['caption'], $purchase_result['keyboard']);
+            sendMessage(ADMIN_CHAT_ID, $purchase_result['admin_notification']);
+        } else {
+            sendMessage($chat_id, $purchase_result['error_message']);
+            sendMessage(ADMIN_CHAT_ID, "⚠️ <b>خطای ساخت سرویس</b>\n\nکاربر با شناسه <code>$chat_id</code> قصد خرید پلن '{$plan['name']}' را داشت اما ارتباط با پنل ناموفق بود.");
+        }
+        updateUserData($chat_id, 'main_menu');
+        handleMainMenu($chat_id, $first_name);
+
+    } else {
+    // کاربر موجودی کافی ندارد، فاکتور صادر شود
+    $needed_amount = $final_price - $user_balance;
+    $settings = getSettings();
+    
+    $encoded_name = base64_encode($custom_name);
+
+    $keyboard_buttons = [];
+    if (($settings['payment_gateway_status'] ?? 'off') == 'on' && !empty($settings['zarinpal_merchant_id'])) {
+        $callback_data_online = "charge_for_plan_{$needed_amount}_{$plan_id}";
+        if ($discount_code) $callback_data_online .= "_{$discount_code}";
+        $callback_data_online .= "_{$encoded_name}"; // اضافه کردن نام به انتها
+        $keyboard_buttons[] = [['text' => '🌐 پرداخت آنلاین (زرین‌پال)', 'callback_data' => $callback_data_online]];
+    }
+    if (!empty($settings['payment_method']['card_number'])) {
+        $callback_data_manual = "manual_pay_for_plan_{$needed_amount}_{$plan_id}";
+        if ($discount_code) $callback_data_manual .= "_{$discount_code}";
+        $callback_data_manual .= "_{$encoded_name}"; // اضافه کردن نام به انتها
+        $keyboard_buttons[] = [['text' => '💳 پرداخت کارت به کارت', 'callback_data' => $callback_data_manual]];
+    }
+
+        if (empty($keyboard_buttons)) {
+            sendMessage($chat_id, "❌ موجودی شما کافی نیست و هیچ روش پرداختی توسط ادمین فعال نشده است.");
+        } else {
+            $message = "⚠️ موجودی شما کافی نیست!\n\n" .
+                       "▫️ قیمت پلن: " . number_format($final_price) . " تومان\n" .
+                       "▫️ موجودی شما: " . number_format($user_balance) . " تومان\n" .
+                       "<b>💰 مبلغ مورد نیاز: " . number_format($needed_amount) . " تومان</b>\n\n" .
+                       "لطفاً روش پرداخت برای تکمیل خرید را انتخاب کنید:";
+            sendMessage($chat_id, $message, ['inline_keyboard' => $keyboard_buttons]);
+        }
+    }
+    break;
+            
+            case 'admin_awaiting_user_search':
+                if ($isAnAdmin && hasPermission($chat_id, 'manage_users')) {
+                    if (!is_numeric($text)) {
+                        sendMessage($chat_id, "❌ شناسه عددی نامعتبر است. لطفاً فقط عدد وارد کنید.", $cancelKeyboard);
+                        break;
+                    }
+                    $target_user = getUserData($text, '');
+                    if (!$target_user || !isset($target_user['chat_id'])) {
+                        sendMessage($chat_id, "❌ کاربری با این شناسه یافت نشد. لطفاً شناسه را بررسی کرده و مجدداً تلاش کنید.", $cancelKeyboard);
+                        break;
+                    }
+                    
+                    $chat_info_response = apiRequest('getChat', ['chat_id' => $target_user['chat_id']]);
+                    $chat_info = json_decode($chat_info_response, true);
+                    
+                    $profile_link_html = '';
+                    if ($chat_info['ok'] && !empty($chat_info['result']['username'])) {
+                        $username = $chat_info['result']['username'];
+                        $profile_link_html = "👤 حساب کاربری: <a href='https://t.me/{$username}'>@{$username}</a>\n";
+                    } else {
+                        $profile_link_html = "👤 حساب کاربری: <a href='tg://user?id={$target_user['chat_id']}'>مشاهده پروفایل (بدون یوزرنیم)</a>\n";
+                    }
+                    
+
+                    // نمایش اطلاعات و دکمه‌های مدیریتی
+                    $balance = $target_user['balance'] ?? 0;
+                    $status_text = ($target_user['status'] ?? 'active') === 'active' ? 'فعال ✅' : 'مسدود 🚫';
+
+                    $message = "<b>اطلاعات کاربر:</b> " . htmlspecialchars($target_user['first_name']) . "\n\n" .
+                               "▫️ شناسه: <code>{$target_user['chat_id']}</code>\n" .
+                               $profile_link_html . 
+                               "💰 موجودی: " . number_format($balance) . " تومان\n" .
+                               "▫️ وضعیت: <b>{$status_text}</b>\n\n" .
+                               "لطفاً عملیات مورد نظر را انتخاب کنید:";
+
+                    $status_button_text = ($target_user['status'] ?? 'active') === 'active' ? '🚫 مسدود کردن' : '✅ آزاد کردن';
+                    $status_callback = ($target_user['status'] ?? 'active') === 'active' ? "ban_user_{$target_user['chat_id']}" : "unban_user_{$target_user['chat_id']}";
+
+                    $keyboard = ['inline_keyboard' => [
+                        [
+                            ['text' => '➕ افزایش موجودی', 'callback_data' => "add_balance_{$target_user['chat_id']}"],
+                            ['text' => '➖ کاهش موجودی', 'callback_data' => "deduct_balance_{$target_user['chat_id']}"]
+                        ],
+                        [
+                            ['text' => '✉️ ارسال پیام', 'callback_data' => "message_user_{$target_user['chat_id']}"],
+                            ['text' => '🔧 سرویس‌های کاربر', 'callback_data' => "show_user_services_{$target_user['chat_id']}"]
+                        ],
+                        [
+                             ['text' => $status_button_text, 'callback_data' => $status_callback]
+                        ],
+                        [
+                            ['text' => '🔎 جستجوی کاربر دیگر', 'callback_data' => 'search_another_user']
+                        ]
+                    ]];
+
+                    sendMessage($chat_id, $message, $keyboard);
+                    // وضعیت را به حالت انتظار برای جستجوی بعدی برمی‌گردانیم تا ادمین بتواند پشت سر هم جستجو کند
+                    updateUserData($chat_id, 'admin_awaiting_user_search', ['admin_view' => 'admin']);
+                }
+                break;
+            
             case 'admin_awaiting_renewal_price_day':
     if ($isAnAdmin && is_numeric($text) && $text >= 0) {
         $settings = getSettings();
@@ -2337,20 +2658,20 @@ if (isset($update['message']) || USER_INLINE_KEYBOARD) {
                 case 'user_awaiting_discount_code':
                 $code = strtoupper(trim($text));
                 $category_id = $user_data['state_data']['target_category_id'];
-                $server_id = $user_data['state_data']['target_server_id']; // دریافت server_id از state
+                $server_id = $user_data['state_data']['target_server_id'];
                 
                 $stmt = pdo()->prepare("SELECT * FROM discount_codes WHERE code = ? AND status = 'active' AND usage_count < max_usage");
                 $stmt->execute([$code]);
                 $discount = $stmt->fetch();
                 if (!$discount) {
                     sendMessage($chat_id, "❌ کد تخفیف وارد شده نامعتبر یا منقضی شده است.");
-                    // بازگشت به لیست پلن‌های همان سرور و دسته
+         
                     showPlansForCategoryAndServer($chat_id, $category_id, $server_id); 
                     updateUserData($chat_id, 'main_menu');
                     break;
                 }
 
-                // کوئری برای گرفتن پلن‌ها بر اساس دسته و سرور
+              
                 $plan_stmt = pdo()->prepare("SELECT * FROM plans WHERE category_id = ? AND server_id = ? AND status = 'active' AND is_test_plan = 0");
                 $plan_stmt->execute([$category_id, $server_id]);
                 $active_plans = $plan_stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -2372,7 +2693,7 @@ if (isset($update['message']) || USER_INLINE_KEYBOARD) {
                     $button_text = "{$plan['name']} | " . number_format($original_price) . " ⬅️ " . number_format($discounted_price) . " تومان";
                     $keyboard_buttons[] = [['text' => $button_text, 'callback_data' => "buy_plan_{$plan['id']}_with_code_{$code}"]];
                 }
-                // دکمه بازگشت به لیست پلن‌های همان سرور و دسته
+             
                 $keyboard_buttons[] = [['text' => '◀️ بازگشت', 'callback_data' => "show_plans_cat_{$category_id}_srv_{$server_id}"]];
                 sendMessage($chat_id, $message, ['inline_keyboard' => $keyboard_buttons]);
                 updateUserData($chat_id, 'main_menu');
@@ -2603,7 +2924,7 @@ if (isset($update['message']) || USER_INLINE_KEYBOARD) {
                     $stmt = pdo()->prepare("UPDATE renewal_requests SET photo_file_id = ? WHERE id = ?");
                     $stmt->execute([$photo_id, $state_data['renewal_request_id']]);
                     
-                    // Notify admins
+
                     $request_id = $state_data['renewal_request_id'];
                     $caption = "<b>درخواست تمدید سرویس جدید</b>\n\n" .
                                "👤 کاربر: " . htmlspecialchars($first_name) . " (<code>{$chat_id}</code>)\n" .
@@ -2621,7 +2942,7 @@ if (isset($update['message']) || USER_INLINE_KEYBOARD) {
                     $all_admins = getAdmins();
                     $all_admins[ADMIN_CHAT_ID] = [];
                     foreach (array_keys($all_admins) as $admin_id) {
-                        if (hasPermission($admin_id, 'manage_payment')) { // or a new permission
+                        if (hasPermission($admin_id, 'manage_payment')) {
                            sendPhoto($admin_id, $photo_id, $caption, $keyboard);
                         }
                     }
@@ -2726,16 +3047,14 @@ if (isset($update['message']) || USER_INLINE_KEYBOARD) {
             if ($isAnAdmin && hasPermission($chat_id, 'manage_users')) {
                 $keyboard = [
                     'keyboard' => [
-                        [['text' => '➕ افزایش موجودی'], ['text' => '➖ کاهش موجودی']],
+                        [['text' => '🔎 جستجوی کاربر (مدیریت فردی)']],
                         [['text' => '➕ افزودن حجم همگانی'], ['text' => '➕ افزودن زمان همگانی']],
                         [['text' => '💰 افزایش موجودی همگانی']],
-                        [['text' => '✉️ ارسال پیام به کاربر']],
-                        [['text' => '🚫 مسدود کردن کاربر'], ['text' => '✅ آزاد کردن کاربر']],
                         [['text' => '◀️ بازگشت به منوی اصلی']],
                     ],
                     'resize_keyboard' => true,
                 ];
-                sendMessage($chat_id, "گزینه مورد نظر را برای مدیریت کاربران انتخاب کنید:", $keyboard);
+                sendMessage($chat_id, "لطفاً نوع عملیات مدیریت کاربران را انتخاب کنید:", $keyboard);
             }
             break;
 
@@ -2792,6 +3111,34 @@ if (isset($update['message']) || USER_INLINE_KEYBOARD) {
             if ($isAnAdmin && hasPermission($chat_id, 'manage_users')) {
                 updateUserData($chat_id, 'admin_awaiting_user_id_for_unban', ['admin_view' => 'admin']);
                 sendMessage($chat_id, "شناسه عددی کاربری که می‌خواهید از مسدودیت خارج کنید را وارد کنید:", $cancelKeyboard);
+            }
+            break;
+
+        case '🔎 جستجوی کاربر (مدیریت فردی)':
+            if ($isAnAdmin && hasPermission($chat_id, 'manage_users')) {
+                updateUserData($chat_id, 'admin_awaiting_user_search', ['admin_view' => 'admin']);
+                sendMessage($chat_id, "لطفاً شناسه عددی (Chat ID) کاربر مورد نظر را برای جستجو وارد کنید:", $cancelKeyboard);
+            }
+            break;
+            
+        case '💰 افزایش موجودی همگانی':
+            if ($isAnAdmin && hasPermission($chat_id, 'manage_users')) {
+                updateUserData($chat_id, 'admin_awaiting_bulk_balance_amount', ['admin_view' => 'admin']);
+                sendMessage($chat_id, "لطفا مبلغی که می‌خواهید به موجودی تمام کاربران فعال اضافه شود را به تومان وارد کنید:", $cancelKeyboard);
+            }
+            break;
+
+        case '➕ افزودن حجم همگانی':
+            if ($isAnAdmin && hasPermission($chat_id, 'manage_users')) {
+                updateUserData($chat_id, 'admin_awaiting_bulk_data_amount', ['admin_view' => 'admin']);
+                sendMessage($chat_id, "لطفا مقدار حجمی که می‌خواهید به تمام سرویس‌ها اضافه شود را به گیگابایت (GB) وارد کنید:", $cancelKeyboard);
+            }
+            break;
+
+        case '➕ افزودن زمان همگانی':
+            if ($isAnAdmin && hasPermission($chat_id, 'manage_users')) {
+                updateUserData($chat_id, 'admin_awaiting_bulk_time_amount', ['admin_view' => 'admin']);
+                sendMessage($chat_id, "لطفا تعداد روزی که می‌خواهید به تمام سرویس‌ها اضافه شود را وارد کنید:", $cancelKeyboard);
             }
             break;
 

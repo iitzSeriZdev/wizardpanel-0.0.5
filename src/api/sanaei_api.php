@@ -1,6 +1,6 @@
 <?php
 
-// --- توابع پایه (بدون تغییر) ---
+// --- توابع پایه  ---
 
 function getSanaeiCookie($server_id) {
     $cache_key = 'sanaei_cookie_' . $server_id;
@@ -106,7 +106,7 @@ function createSanaeiUser($plan, $chat_id, $plan_id) {
 
     $base_sub_url = !empty($server_info['sub_host']) ? rtrim($server_info['sub_host'], '/') : rtrim($server_info['url'], '/');
     $uuid = generateUUID();
-    $email = "user_{$chat_id}_" . time();
+    $email = $plan['full_username'];
     $subId = generateUUID(16);
     $expire_time = ($plan['duration_days'] > 0) ? (time() + $plan['duration_days'] * 86400) * 1000 : 0;
     $total_bytes = ($plan['volume_gb'] > 0) ? $plan['volume_gb'] * 1024 * 1024 * 1024 : 0;
@@ -118,7 +118,7 @@ function createSanaeiUser($plan, $chat_id, $plan_id) {
         $sub_link = $base_sub_url . '/sub/' . $subId;
         // اصلاحیه: پاس دادن server_id به تابع کمکی
         $links = fetchAndParseSubscriptionUrl($sub_link, $server_id);
-        saveUserService($chat_id, [ 'server_id' => $server_id, 'username' => $email, 'plan_id' => $plan_id, 'sub_url' => $sub_link, 'expire_timestamp' => $expire_time > 0 ? $expire_time / 1000 : 0, 'volume_gb' => $plan['volume_gb'], 'sanaei_inbound_id' => $inbound_id, 'sanaei_uuid' => $uuid ]);
+        
         return ['username' => $email, 'subscription_url' => $sub_link, 'links' => $links];
     }
     

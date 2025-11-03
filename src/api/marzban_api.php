@@ -127,16 +127,30 @@ function createMarzbanUser($plan, $chat_id, $plan_id) {
         return false;
     }
 
-    $username = "user_{$chat_id}_" . time();
+    $stmt_server_protocols = pdo()->prepare("SELECT marzban_protocols FROM servers WHERE id = ?");
+    $stmt_server_protocols->execute([$server_id]);
+    $protocols_json = $stmt_server_protocols->fetchColumn();
+    
+    $proxies = new stdClass(); 
+    
+    if ($protocols_json) {
+        $protocol_list = json_decode($protocols_json, true);
+        if (is_array($protocol_list) && !empty($protocol_list)) {
+            foreach ($protocol_list as $protocol) {
+                $proxies->{$protocol} = new stdClass();
+            }
+        }
+    }
+    
+    if (empty((array)$proxies)) {
+         $proxies->vless = new stdClass();
+    }
+   
+    $username = $plan['full_username'];
 
     $userData = [
         'username' => $username,
-        'proxies' => [
-            'vless' => new stdClass(),
-            'vmess' => new stdClass(),
-            'trojan' => new stdClass(),
-            'shadowsocks' => new stdClass() 
-        ],
+        'proxies' => $proxies, 
         'inbounds' => new stdClass(),
         'expire' => time() + $plan['duration_days'] * 86400,
         'data_limit' => $plan['volume_gb'] * 1024 * 1024 * 1024,
@@ -145,7 +159,7 @@ function createMarzbanUser($plan, $chat_id, $plan_id) {
 
     $response = marzbanApiRequest('/api/user', $server_id, 'POST', $userData, $accessToken);
 
-        if (isset($response['username'])) {
+    if (isset($response['username'])) {
         pdo()
             ->prepare("UPDATE services SET warning_sent = 0 WHERE marzban_username = ? AND server_id = ?")
             ->execute([$response['username'], $server_id]);
@@ -158,15 +172,6 @@ function createMarzbanUser($plan, $chat_id, $plan_id) {
         $base_sub_url = !empty($server_info['sub_host']) ? rtrim($server_info['sub_host'], '/') : rtrim($server_info['url'], '/');
         $sub_path = parse_url($response['subscription_url'], PHP_URL_PATH);
         $final_sub_url = $base_sub_url . $sub_path;
-
-        saveUserService($chat_id, [
-            'server_id' => $server_id,
-            'username' => $response['username'],
-            'plan_id' => $plan_id,
-            'sub_url' => $final_sub_url,
-            'expire_timestamp' => $userData['expire'],
-            'volume_gb' => $plan['volume_gb'],
-        ]);
         
        
         $response['subscription_url'] = $final_sub_url; 

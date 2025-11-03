@@ -34,16 +34,39 @@ function getDbBaseSchemaSQL(): string {
     CREATE TABLE IF NOT EXISTS `categories` ( `id` INT AUTO_INCREMENT PRIMARY KEY, `name` VARCHAR(255) NOT NULL, `status` VARCHAR(20) NOT NULL DEFAULT 'active' ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     CREATE TABLE IF NOT EXISTS `servers` ( `id` INT AUTO_INCREMENT PRIMARY KEY, `name` VARCHAR(255) NOT NULL, `url` VARCHAR(255) NOT NULL, `username` VARCHAR(255) NOT NULL, `password` VARCHAR(255) NOT NULL, `status` VARCHAR(20) NOT NULL DEFAULT 'active' ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     CREATE TABLE IF NOT EXISTS `plans` ( `id` INT AUTO_INCREMENT PRIMARY KEY, `server_id` INT NOT NULL, `category_id` INT NOT NULL, `name` VARCHAR(255) NOT NULL, `price` DECIMAL(10,2) NOT NULL, `volume_gb` INT NOT NULL, `duration_days` INT NOT NULL, `description` TEXT, `show_sub_link` TINYINT(1) NOT NULL DEFAULT 1, `show_conf_links` TINYINT(1) NOT NULL DEFAULT 1, `status` VARCHAR(20) NOT NULL DEFAULT 'active' ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-    CREATE TABLE IF NOT EXISTS `services` ( `id` INT AUTO_INCREMENT PRIMARY KEY, `server_id` INT NOT NULL, `owner_chat_id` BIGINT NOT NULL, `marzban_username` VARCHAR(255) NOT NULL, `plan_id` INT NOT NULL, `sub_url` TEXT, `purchase_date` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, `expire_timestamp` BIGINT, `volume_gb` INT, `warning_sent` TINYINT(1) NOT NULL DEFAULT 0 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    CREATE TABLE IF NOT EXISTS `services` ( `id` INT AUTO_INCREMENT PRIMARY KEY, `server_id` INT NOT NULL, `owner_chat_id` BIGINT NOT NULL, `marzban_username` VARCHAR(255) NOT NULL, `custom_name` VARCHAR(255) NULL DEFAULT NULL, `plan_id` INT NOT NULL, `sub_url` TEXT, `purchase_date` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, `expire_timestamp` BIGINT, `volume_gb` INT, `warning_sent` TINYINT(1) NOT NULL DEFAULT 0 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     CREATE TABLE IF NOT EXISTS `settings` ( `setting_key` VARCHAR(255) NOT NULL PRIMARY KEY, `setting_value` TEXT ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     CREATE TABLE IF NOT EXISTS `tickets` ( `id` VARCHAR(50) NOT NULL PRIMARY KEY, `user_id` BIGINT NOT NULL, `user_name` VARCHAR(255), `subject` VARCHAR(255), `status` VARCHAR(20) NOT NULL DEFAULT 'open', `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     CREATE TABLE IF NOT EXISTS `ticket_conversations` ( `id` INT AUTO_INCREMENT PRIMARY KEY, `ticket_id` VARCHAR(50) NOT NULL, `sender` VARCHAR(10) NOT NULL, `message_text` TEXT, `sent_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     CREATE TABLE IF NOT EXISTS `cache` ( `cache_key` VARCHAR(255) NOT NULL PRIMARY KEY, `cache_value` TEXT, `expire_at` INT ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     CREATE TABLE IF NOT EXISTS `discount_codes` ( `id` INT AUTO_INCREMENT PRIMARY KEY, `code` VARCHAR(50) NOT NULL UNIQUE, `type` VARCHAR(10) NOT NULL, `value` DECIMAL(10,2) NOT NULL, `max_usage` INT NOT NULL, `usage_count` INT NOT NULL DEFAULT 0, `status` VARCHAR(20) NOT NULL DEFAULT 'active' ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     CREATE TABLE IF NOT EXISTS `guides` ( `id` INT AUTO_INCREMENT PRIMARY KEY, `button_name` VARCHAR(255) NOT NULL, `content_type` VARCHAR(10) NOT NULL, `message_text` TEXT, `photo_id` VARCHAR(255) DEFAULT NULL, `inline_keyboard` TEXT, `status` VARCHAR(20) NOT NULL DEFAULT 'active' ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-    CREATE TABLE IF NOT EXISTS `payment_requests` ( `id` INT AUTO_INCREMENT PRIMARY KEY, `user_id` BIGINT NOT NULL, `amount` DECIMAL(10,2) NOT NULL, `photo_file_id` VARCHAR(255) NOT NULL, `status` VARCHAR(20) NOT NULL DEFAULT 'pending', `processed_by_admin_id` BIGINT, `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP, `processed_at` TIMESTAMP NULL ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    CREATE TABLE IF NOT EXISTS `payment_requests` ( 
+  `id` INT AUTO_INCREMENT PRIMARY KEY, 
+  `user_id` BIGINT NOT NULL, 
+  `amount` DECIMAL(10,2) NOT NULL, 
+  `photo_file_id` VARCHAR(255) NOT NULL, 
+  `status` VARCHAR(20) NOT NULL DEFAULT 'pending', 
+  `metadata` TEXT DEFAULT NULL, 
+  `processed_by_admin_id` BIGINT, 
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP, 
+  `processed_at` TIMESTAMP NULL 
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     CREATE TABLE IF NOT EXISTS `renewal_requests` ( `id` int(11) NOT NULL AUTO_INCREMENT, `user_id` bigint(20) NOT NULL, `service_username` varchar(255) NOT NULL, `days_to_add` int(11) NOT NULL, `gb_to_add` int(11) NOT NULL, `total_cost` decimal(10,2) NOT NULL, `status` varchar(20) NOT NULL DEFAULT 'pending', `photo_file_id` varchar(255) DEFAULT NULL, `processed_by_admin_id` bigint(20) DEFAULT NULL, `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP, `processed_at` timestamp NULL DEFAULT NULL, PRIMARY KEY (`id`) ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-    CREATE TABLE IF NOT EXISTS `transactions` ( `id` int(11) NOT NULL AUTO_INCREMENT, `user_id` bigint(20) NOT NULL, `amount` decimal(10,2) NOT NULL, `authority` varchar(50) NOT NULL, `ref_id` varchar(50) DEFAULT NULL, `description` varchar(255) DEFAULT NULL, `status` varchar(20) NOT NULL DEFAULT 'pending', `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP, `verified_at` timestamp NULL DEFAULT NULL, PRIMARY KEY (`id`), UNIQUE KEY `authority` (`authority`) ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    CREATE TABLE IF NOT EXISTS `transactions` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `user_id` bigint(20) NOT NULL,
+  `amount` decimal(10,2) NOT NULL,
+  `authority` varchar(50) NOT NULL,
+  `ref_id` varchar(50) DEFAULT NULL,
+  `description` varchar(255) DEFAULT NULL,
+  `metadata` TEXT DEFAULT NULL,
+  `status` varchar(20) NOT NULL DEFAULT 'pending',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `verified_at` timestamp NULL DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `authority` (`authority`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     ";
 }
 
@@ -135,6 +158,14 @@ function runDbUpgrades(PDO $pdo): array {
     if (!columnExists($pdo, 'servers', 'sub_host')) {
         $pdo->exec("ALTER TABLE `servers` ADD `sub_host` VARCHAR(255) NULL DEFAULT NULL AFTER `url`;");
         $messages[] = "✅ ستون `sub_host` برای لینک اشتراک سفارشی به جدول `servers` اضافه شد.";
+    }
+    if (!columnExists($pdo, 'servers', 'marzban_protocols')) {
+        $pdo->exec("ALTER TABLE `servers` ADD `marzban_protocols` VARCHAR(255) NULL DEFAULT NULL AFTER `sub_host`;");
+        $messages[] = "✅ ستون `marzban_protocols` برای تنظیم پروتکل‌های مرزبان اضافه شد.";
+    }
+    if (!columnExists($pdo, 'services', 'custom_name')) {
+        $pdo->exec("ALTER TABLE `services` ADD `custom_name` VARCHAR(255) NULL DEFAULT NULL AFTER `marzban_username`;");
+        $messages[] = "✅ ستون `custom_name` برای نام دلخواه سرویس به جدول `services` اضافه شد.";
     }
 
     return $messages;

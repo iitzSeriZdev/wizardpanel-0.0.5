@@ -400,8 +400,8 @@ function getUserServices($chat_id) {
 }
 
 function saveUserService($chat_id, $serviceData) {
-    $stmt = pdo()->prepare("INSERT INTO services (owner_chat_id, server_id, marzban_username, plan_id, sub_url, expire_timestamp, volume_gb) VALUES (?, ?, ?, ?, ?, ?, ?)");
-    $stmt->execute([$chat_id, $serviceData['server_id'], $serviceData['username'], $serviceData['plan_id'], $serviceData['sub_url'], $serviceData['expire_timestamp'], $serviceData['volume_gb']]);
+    $stmt = pdo()->prepare("INSERT INTO services (owner_chat_id, server_id, marzban_username, custom_name, plan_id, sub_url, expire_timestamp, volume_gb) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+    $stmt->execute([$chat_id, $serviceData['server_id'], $serviceData['username'], $serviceData['custom_name'], $serviceData['plan_id'], $serviceData['sub_url'], $serviceData['expire_timestamp'], $serviceData['volume_gb']]);
 }
 
 function deleteUserService($chat_id, $username, $server_id) {
@@ -662,7 +662,7 @@ function showServersForCategory($chat_id, $category_id) {
     $message = "🛍️ <b>دسته‌بندی «{$category_name}»</b>\n\nلطفاً سرور (لوکیشن) مورد نظر خود را انتخاب کنید:";
     $keyboard_buttons = [];
     foreach ($servers as $server) {
-        // فرمت callback جدید: show_plans_cat_{ID}_srv_{ID}
+      
         $keyboard_buttons[] = [['text' => "🖥 {$server['name']}", 'callback_data' => "show_plans_cat_{$category_id}_srv_{$server['id']}"]];
     }
     $keyboard_buttons[] = [['text' => '◀️ بازگشت به دسته‌بندی‌ها', 'callback_data' => 'back_to_categories']];
@@ -1162,4 +1162,173 @@ function showRenewalManagementMenu($chat_id, $message_id = null) {
     } else {
         sendMessage($chat_id, $message, $keyboard);
     }
+}
+
+function showMarzbanProtocolEditor($chat_id, $message_id, $server_id) {
+    $stmt_server = pdo()->prepare("SELECT name, marzban_protocols FROM servers WHERE id = ?");
+    $stmt_server->execute([$server_id]);
+    $server = $stmt_server->fetch();
+
+    if (!$server) {
+        editMessageText($chat_id, $message_id, "❌ سرور یافت نشد.");
+        return;
+    }
+
+    $all_protocols = ['vless', 'vmess', 'trojan', 'shadowsocks'];
+    
+    $enabled_protocols = $server['marzban_protocols'] ? json_decode($server['marzban_protocols'], true) : ['vless']; 
+    if (!is_array($enabled_protocols)) $enabled_protocols = ['vless'];
+    
+    $message = "<b>⚙️ تنظیم پروتکل‌های سرور: {$server['name']}</b>\n\n";
+    $message .= "پروتکل‌هایی را که می‌خواهید برای کاربران جدید در این سرور ایجاد شوند، انتخاب کنید.";
+    
+    $keyboard_buttons = [];
+    $row = [];
+    foreach ($all_protocols as $protocol) {
+        $icon = in_array($protocol, $enabled_protocols) ? '✅' : '❌';
+        $row[] = ['text' => "{$icon} " . ucfirst($protocol), 'callback_data' => "toggle_protocol_{$server_id}_{$protocol}"];
+        if (count($row) == 2) {
+            $keyboard_buttons[] = $row;
+            $row = [];
+        }
+    }
+    if (!empty($row)) {
+        $keyboard_buttons[] = $row;
+    }
+    
+    $keyboard_buttons[] = [['text' => '◀️ بازگشت به سرور', 'callback_data' => "view_server_{$server_id}"]];
+    
+    editMessageText($chat_id, $message_id, $message, ['inline_keyboard' => $keyboard_buttons]);
+}
+
+function createZarinpalLink($chat_id, $amount, $description, $metadata = []) {
+    $settings = getSettings();
+    $merchant_id = $settings['zarinpal_merchant_id'];
+    $script_url = 'https://' . $_SERVER['HTTP_HOST'] . rtrim(dirname($_SERVER['PHP_SELF']), '/') . '/verify_payment.php';
+    
+    $data = [
+        "merchant_id" => $merchant_id,
+        "amount" => $amount * 10, // تبدیل تومان به ریال
+        "callback_url" => $script_url,
+        "description" => $description,
+        "metadata" => $metadata
+    ];
+    $jsonData = json_encode($data);
+
+    $ch = curl_init('https://api.zarinpal.com/pg/v4/payment/request.json');
+    curl_setopt($ch, CURLOPT_USERAGENT, 'ZarinPal Rest Api v4');
+    curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'POST');
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $jsonData);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json', 'Content-Length: ' . strlen($jsonData)]);
+    
+    $result = curl_exec($ch);
+    curl_close($ch);
+    $result = json_decode($result, true);
+    
+    if (empty($result['errors'])) {
+        $authority = $result['data']['authority'];
+        
+        // ثبت تراکنش در دیتابیس
+        $stmt = pdo()->prepare("INSERT INTO transactions (user_id, amount, authority, description, metadata) VALUES (?, ?, ?, ?, ?)");
+        $stmt->execute([$chat_id, $amount, $authority, $description, json_encode($metadata)]);
+        
+        $payment_url = 'https://www.zarinpal.com/pg/StartPay/' . $authority;
+        return ['success' => true, 'url' => $payment_url];
+    } else {
+        $error_code = $result['errors']['code'];
+        return ['success' => false, 'error' => "❌ خطا در اتصال به درگاه پرداخت. کد خطا: {$error_code}"];
+    }
+}
+
+function completePurchase($user_id, $plan_id, $custom_name, $final_price, $discount_code, $discount_object, $discount_applied) {
+    $plan = getPlanById($plan_id);
+    $user_data = getUserData($user_id);
+    $first_name = $user_data['first_name'];
+
+    // ساخت نام کاربری کامل و یکتا برای پنل
+    $plan['full_username'] = preg_replace('/[^a-zA-Z0-9_.]/', '', $custom_name) . '_user' . $user_id . '_' . time();
+
+
+    $panel_user_data = createPanelUser($plan, $user_id, $plan_id);
+    if ($panel_user_data && isset($panel_user_data['username'])) {
+        if ($plan['is_test_plan'] == 1) {
+            pdo()->prepare("UPDATE users SET test_config_count = test_config_count + 1 WHERE chat_id = ?")->execute([$user_id]);
+        } else {
+            updateUserBalance($user_id, $final_price, 'deduct');
+        }
+
+        if ($plan['purchase_limit'] > 0) {
+            pdo()->prepare("UPDATE plans SET purchase_count = purchase_count + 1 WHERE id = ?")->execute([$plan_id]);
+        }
+
+        if ($discount_applied && $discount_object) {
+            pdo()->prepare("UPDATE discount_codes SET usage_count = usage_count + 1 WHERE id = ?")->execute([$discount_object['id']]);
+        }
+        
+        $expire_timestamp = $panel_user_data['expire'] ?? (isset($panel_user_data['expire_date']) ? strtotime($panel_user_data['expire_date']) : (time() + $plan['duration_days'] * 86400));
+        
+        saveUserService($user_id, [
+            'server_id' => $plan['server_id'],
+            'username' => $panel_user_data['username'],
+            'custom_name' => $custom_name,
+            'plan_id' => $plan_id,
+            'sub_url' => $panel_user_data['subscription_url'],
+            'expire_timestamp' => $expire_timestamp,
+            'volume_gb' => $plan['volume_gb'],
+        ]);
+        
+        $new_balance = $user_data['balance'] - $final_price;
+        $sub_link = $panel_user_data['subscription_url'];
+        $qr_code_url = generateQrCodeUrl($sub_link);
+
+        $caption = "✅ <b>خرید شما با موفقیت انجام شد.</b>\n";
+        if ($discount_applied) {
+            $caption .= "🏷 قیمت اصلی: " . number_format($plan['price']) . " تومان\n";
+            $caption .= "💰 قیمت با تخفیف: <b>" . number_format($final_price) . " تومان</b>\n";
+        }
+        $caption .= "\n▫️ نام سرویس: <b>" . htmlspecialchars($custom_name) . "</b>\n\n";
+
+        if ($plan['show_sub_link']) {
+            $caption .= "🔗 لینک اشتراک (Subscription):\n<code>" . htmlspecialchars($sub_link) . "</code>\n\n";
+        }
+        
+        $caption .= "💰 موجودی جدید شما: " . number_format($new_balance) . " تومان";
+
+        $chat_info_response = apiRequest('getChat', ['chat_id' => $user_id]);
+        $chat_info = json_decode($chat_info_response, true);
+        
+        $profile_link_html = "👤 کاربر: " . htmlspecialchars($first_name) . " (<code>$user_id</code>)\n";
+
+        $admin_notification = "✅ <b>خرید جدید</b>\n\n";
+        $admin_notification .= $profile_link_html;
+        $admin_notification .= "🛍️ پلن: {$plan['name']}\n";
+        $admin_notification .= "💬 نام سرویس: " . htmlspecialchars($custom_name) . "\n";
+
+        if ($discount_applied) {
+            $admin_notification .= "💵 قیمت اصلی: " . number_format($plan['price']) . " تومان\n";
+            $admin_notification .= "🏷 کد تخفیف: <code>{$discount_code}</code>\n";
+            $admin_notification .= "💳 مبلغ پرداخت شده: <b>" . number_format($final_price) . " تومان</b>";
+        } else {
+            $admin_notification .= "💳 مبلغ پرداخت شده: " . number_format($final_price) . " تومان";
+        }
+        
+        $keyboard_buttons = [];
+        if ($plan['show_conf_links'] && !empty($panel_user_data['links'])) {
+            $keyboard_buttons[] = [['text' => '📋 دریافت کانفیگ‌ها', 'callback_data' => "get_configs_{$panel_user_data['username']}"]];
+        }
+
+        return [
+            'success' => true,
+            'caption' => $caption,
+            'qr_code_url' => $qr_code_url,
+            'keyboard' => ['inline_keyboard' => $keyboard_buttons],
+            'admin_notification' => $admin_notification,
+        ];
+    }
+    
+    return [
+        'success' => false,
+        'error_message' => "❌ متاسفانه در ایجاد سرویس شما مشکلی پیش آمد. لطفا با پشتیبانی تماس بگیرید. مبلغی از حساب شما کسر نشده است."
+    ];
 }

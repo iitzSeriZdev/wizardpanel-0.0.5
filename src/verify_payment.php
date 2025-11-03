@@ -27,7 +27,7 @@ $merchant_id = $settings['zarinpal_merchant_id'] ?? '';
 $amount = (int)$transaction['amount']; // مبلغ به تومان
 
 if ($status == 'OK') {
-    // تراکنش موفق بوده، حالا باید وریفای کنیم
+    // تراکنش موفق بود
     $data = [
         "merchant_id" => $merchant_id,
         "amount" => $amount * 10, // تبدیل تومان به ریال برای وریفای
@@ -55,18 +55,64 @@ if ($status == 'OK') {
             $stmt = pdo()->prepare("UPDATE transactions SET status = 'completed', ref_id = ?, verified_at = NOW() WHERE id = ?");
             $stmt->execute([$ref_id, $transaction['id']]);
 
-            // شارژ حساب کاربر
-            updateUserBalance($transaction['user_id'], $transaction['amount'], 'add');
-            $new_balance_data = getUserData($transaction['user_id']);
+            $metadata = json_decode($transaction['metadata'], true);
+            
+            // --- تشخیص هدف پرداخت ---
+            if (isset($metadata['purpose']) && $metadata['purpose'] === 'complete_purchase') {
+                
+                $plan_id = $metadata['plan_id'];
+                $user_id = $metadata['user_id'];
+                $discount_code = $metadata['discount_code'] ?? null;
+                
+                $plan = getPlanById($plan_id);
+                $final_price = (float)$plan['price'];
+                $discount_applied = false;
+                $discount_object = null;
 
-            // ارسال پیام موفقیت به کاربر در تلگرام
-            $message = "✅ پرداخت شما به مبلغ " . number_format($transaction['amount']) . " تومان با موفقیت انجام و حساب شما شارژ شد.\n\n" .
-                       "▫️ شماره پیگیری: `{$ref_id}`\n" .
-                       "💰 موجودی جدید: " . number_format($new_balance_data['balance']) . " تومان";
-            sendMessage($transaction['user_id'], $message);
+                if ($discount_code) {
+                    $stmt_discount = pdo()->prepare("SELECT * FROM discount_codes WHERE code = ?");
+                    $stmt_discount->execute([$discount_code]);
+                    $discount_object = $stmt_discount->fetch();
+                    if ($discount_object) {
+                         if ($discount_object['type'] == 'percent') {
+                            $final_price = $plan['price'] - ($plan['price'] * $discount_object['value']) / 100;
+                        } else {
+                            $final_price = $plan['price'] - $discount_object['value'];
+                        }
+                        $final_price = max(0, $final_price);
+                        $discount_applied = true;
+                    }
+                }
+                
+                // شارژ موقت حساب کاربر برای کسر هزینه
+                updateUserBalance($user_id, $transaction['amount'], 'add');
 
-            // نمایش پیام موفقیت در مرورگر
-            echo "<h1>پرداخت موفق</h1><p>تراکنش شما با موفقیت انجام شد. شماره پیگیری: {$ref_id}. لطفاً به ربات تلگرام بازگردید.</p>";
+                
+                // نام دلخواه از متادیتا 
+$custom_name = $metadata['custom_name'] ?? 'سرویس';
+$purchase_result = completePurchase($user_id, $plan_id, $custom_name, $final_price, $discount_code, $discount_object, $discount_applied);
+
+                if ($purchase_result['success']) {
+                    sendPhoto($user_id, $purchase_result['qr_code_url'], $purchase_result['caption'], $purchase_result['keyboard']);
+                    sendMessage(ADMIN_CHAT_ID, $purchase_result['admin_notification']);
+                    echo "<h1>پرداخت و خرید موفق</h1><p>سرویس شما با موفقیت ایجاد شد. لطفاً به ربات تلگرام بازگردید.</p>";
+                } else {
+                     sendMessage($user_id, "❌ پرداخت شما موفق بود اما در ایجاد سرویس خطایی رخ داد. مبلغ پرداخت شده به موجودی شما اضافه شد. لطفاً با پشتیبانی تماس بگیرید.");
+                     echo "<h1>خطا در ساخت سرویس</h1><p>پرداخت موفق بود اما سرویس ایجاد نشد. مبلغ به حساب شما اضافه شد.</p>";
+                }
+
+            } else {
+                // پرداخت برای شارژ عادی حساب  
+                updateUserBalance($transaction['user_id'], $transaction['amount'], 'add');
+                $new_balance_data = getUserData($transaction['user_id']);
+    
+                $message = "✅ پرداخت شما به مبلغ " . number_format($transaction['amount']) . " تومان با موفقیت انجام و حساب شما شارژ شد.\n\n" .
+                           "▫️ شماره پیگیری: `{$ref_id}`\n" .
+                           "💰 موجودی جدید: " . number_format($new_balance_data['balance']) . " تومان";
+                sendMessage($transaction['user_id'], $message);
+    
+                echo "<h1>پرداخت موفق</h1><p>تراکنش شما با موفقیت انجام شد و حساب شما شارژ گردید. شماره پیگیری: {$ref_id}. لطفاً به ربات تلگرام بازگردید.</p>";
+            }
 
         } else {
             // آپدیت وضعیت تراکنش به ناموفق
