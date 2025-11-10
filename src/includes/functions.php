@@ -1,9 +1,28 @@
 <?php
 
+// فراخوانی کلاس‌های جدید
+require_once __DIR__ . '/Logger.php';
+require_once __DIR__ . '/Security.php';
+require_once __DIR__ . '/Cache.php';
+require_once __DIR__ . '/KeyboardBuilder.php';
+require_once __DIR__ . '/MessageTemplates.php';
+require_once __DIR__ . '/ApiClient.php';
+require_once __DIR__ . '/PaymentGateway.php';
+require_once __DIR__ . '/Affiliate.php';
+require_once __DIR__ . '/AdminMessenger.php';
+require_once __DIR__ . '/ConfigNaming.php';
+require_once __DIR__ . '/LogManager.php';
+require_once __DIR__ . '/TicketSystem.php';
+
 // فراخوانی تمام فایل‌های API در ابتدای فایل
 require_once __DIR__ . '/../api/marzban_api.php';
 require_once __DIR__ . '/../api/sanaei_api.php';
 require_once __DIR__ . '/../api/marzneshin_api.php';
+require_once __DIR__ . '/../api/hiddify_api.php';
+require_once __DIR__ . '/../api/alireza_api.php';
+require_once __DIR__ . '/../api/pasargad_api.php';
+require_once __DIR__ . '/../api/txui_api.php';
+require_once __DIR__ . '/AntiSpam.php';
 
 // =====================================================================
 // ---                 توابع اصلی API تلگرام                         ---
@@ -106,9 +125,14 @@ function sendMessage($chat_id, $text, $keyboard = null, $handleMainMenu = false)
         $params['message_id'] = $update['callback_query']['message']['message_id'];
         $result = apiRequest('editMessageText', $params);
         $decoded_result = json_decode($result, true);
+        
+        // اگر editMessageText با خطا مواجه شد، از sendMessage استفاده کن
         if (!$decoded_result || !$decoded_result['ok']) {
+            // اگر خطا مربوط به "message to edit not found" یا خطای 400 است، از sendMessage استفاده کن
+            if (isset($decoded_result['error_code']) && ($decoded_result['error_code'] == 400 || strpos($decoded_result['description'] ?? '', 'message to edit not found') !== false)) {
             unset($params['message_id']);
             return apiRequest('sendMessage', $params);
+            }
         }
         return $result;
     }
@@ -133,10 +157,20 @@ function editMessageText($chat_id, $message_id, $text, $keyboard = null) {
     global $oneTimeEdit;
     if (USER_INLINE_KEYBOARD && $oneTimeEdit) {
         $oneTimeEdit = false;
-        return apiRequest('editMessageText', $params);
+        $result = apiRequest('editMessageText', $params);
+        $decoded_result = json_decode($result, true);
+        
+        // اگر editMessageText با خطا مواجه شد (مثلاً message not found)، از sendMessage استفاده کن
+        if (!$decoded_result || !$decoded_result['ok']) {
+            // اگر خطا مربوط به "message to edit not found" است، از sendMessage استفاده کن
+            if (isset($decoded_result['error_code']) && $decoded_result['error_code'] == 400) {
+                unset($params['message_id']);
+                return apiRequest('sendMessage', $params);
+            }
+        }
+        return $result;
     }
     else {
-    
         unset($params['message_id']);
         return apiRequest('sendMessage', $params);
     }
@@ -159,6 +193,21 @@ function apiRequest($method, $params = []) {
     global $apiRequest;
     $apiRequest = true;
 
+    // استفاده از ApiClient جدید اگر در دسترس باشد
+    if (class_exists('ApiClient')) {
+        try {
+            $client = ApiClient::getInstance();
+            $result = $client->request($method, $params);
+            return json_encode($result, JSON_UNESCAPED_UNICODE);
+        } catch (Exception $e) {
+            // در صورت خطا، به روش قدیمی fallback می‌کنیم
+            if (function_exists('logger')) {
+                logger()->error('ApiClient error, falling back to old method', ['error' => $e->getMessage()]);
+            }
+        }
+    }
+
+    // Fallback به روش قدیمی
     $url = 'https://api.telegram.org/bot' . BOT_TOKEN . '/' . $method;
     $ch = curl_init();
     curl_setopt_array($ch, [
@@ -166,10 +215,15 @@ function apiRequest($method, $params = []) {
         CURLOPT_POST => true,
         CURLOPT_POSTFIELDS => http_build_query($params),
         CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 30,
     ]);
     $response = curl_exec($ch);
     if (curl_errno($ch)) {
+        if (function_exists('logger')) {
+            logger()->error('cURL error in apiRequest: ' . curl_error($ch), ['method' => $method]);
+        } else {
         error_log('cURL error in apiRequest: ' . curl_error($ch));
+        }
     }
     curl_close($ch);
     return $response;
@@ -195,6 +249,12 @@ function getUserData($chat_id, $first_name = 'کاربر') {
 
         $stmt = pdo()->prepare("INSERT INTO users (chat_id, first_name, balance, user_state) VALUES (?, ?, ?, 'main_menu')");
         $stmt->execute([$chat_id, $first_name, $welcome_gift]);
+
+        // ارسال لاگ کاربر جدید
+        if (class_exists('LogManager')) {
+            $logManager = LogManager::getInstance();
+            $logManager->logNewUser($chat_id, $first_name);
+        }
 
         if ($welcome_gift > 0) {
             sendMessage($chat_id, "🎁 به عنوان هدیه خوش‌آمدگویی، مبلغ " . number_format($welcome_gift) . " تومان به حساب شما اضافه شد.");
@@ -326,7 +386,38 @@ function getSettings() {
         'notification_inactive_message' => '👋 سلام! مدت زیادی است که به ما سر نزده‌اید. برای مشاهده جدیدترین سرویس‌ها و پیشنهادات وارد ربات شوید.',
         'verification_method' => 'off',
         'verification_iran_only' => 'off',
-        'inline_keyboard' => 'on'
+        'inline_keyboard' => 'on',
+        'config_prefix' => '',
+        'config_start_number' => '0',
+        'log_group_id' => '',
+        'log_server_enabled' => 'off',
+        'log_error_enabled' => 'on',
+        'log_purchase_enabled' => 'on',
+        'log_transaction_enabled' => 'on',
+        'log_user_new_enabled' => 'off',
+        'log_user_ban_enabled' => 'off',
+        'log_admin_action_enabled' => 'off',
+        'log_payment_enabled' => 'on',
+        'log_config_create_enabled' => 'on',
+        'log_config_delete_enabled' => 'off',
+        'antispam_enabled' => 'off',
+        'antispam_max_actions' => '10',
+        'antispam_time_window' => '5',
+        'antispam_mute_duration' => '60',
+        'antispam_message' => '⚠️ شما به دلیل ارسال پیام‌های زیاد به صورت موقت مسدود شده‌اید. لطفاً صبر کنید.',
+        'speedtest_enabled' => 'off',
+        'userstats_enabled' => 'off',
+        'speedtest_subscription_url' => '',
+        'speedtest_inbound_type' => 'vless',
+        'zibal_enabled' => 'off',
+        'zibal_merchant_id' => '',
+        'zibal_sandbox' => 'off',
+        'newpayment_enabled' => 'off',
+        'newpayment_api_key' => '',
+        'newpayment_sandbox' => 'off',
+        'aqayepardakht_enabled' => 'off',
+        'aqayepardakht_pin' => '',
+        'aqayepardakht_sandbox' => 'off'
     ];
 
     foreach ($defaults as $key => $value) {
@@ -610,7 +701,9 @@ function generatePlanList($chat_id) {
             $plan_info .= "▫️ سرویس: <b>{$plan['marzneshin_service_id']}</b>\n";
         }
         
-        $plan_info .= "▫️ دسته‌بندی: {$cat_name}\n" . "▫️ قیمت: " . number_format($plan['price']) . " تومان\n" . "▫️ حجم: {$plan['volume_gb']} گیگابایت | " . "مدت: {$plan['duration_days']} روز\n";
+        $volume_text = ($plan['volume_gb'] > 0) ? number_format($plan['volume_gb']) . " گیگابایت" : "نامحدود";
+        $duration_text = ($plan['duration_days'] > 0) ? number_format($plan['duration_days']) . " روز" : "نامحدود";
+        $plan_info .= "▫️ دسته‌بندی: {$cat_name}\n" . "▫️ قیمت: " . number_format($plan['price']) . " تومان\n" . "▫️ حجم: {$volume_text} | " . "مدت: {$duration_text}\n";
 
         if ($plan['purchase_limit'] > 0) {
             $plan_info .= "📈 تعداد خرید: <b>{$plan['purchase_count']} / {$plan['purchase_limit']}</b>\n";
@@ -635,7 +728,7 @@ function generatePlanList($chat_id) {
     }
 }
 
-function showServersForCategory($chat_id, $category_id) {
+function showServersForCategory($chat_id, $category_id, $message_id = null) {
     $category_stmt = pdo()->prepare("SELECT name FROM categories WHERE id = ?");
     $category_stmt->execute([$category_id]);
     $category_name = $category_stmt->fetchColumn();
@@ -646,7 +739,7 @@ function showServersForCategory($chat_id, $category_id) {
 
     // کوئری برای پیدا کردن سرورهای فعال که در این دسته‌بندی پلن فعال دارند
     $stmt = pdo()->prepare("
-        SELECT DISTINCT s.id, s.name 
+        SELECT DISTINCT s.id, s.name, s.type
         FROM servers s
         JOIN plans p ON s.id = p.server_id
         WHERE p.category_id = ? AND p.status = 'active' AND s.status = 'active'
@@ -662,11 +755,23 @@ function showServersForCategory($chat_id, $category_id) {
     $message = "🛍️ <b>دسته‌بندی «{$category_name}»</b>\n\nلطفاً سرور (لوکیشن) مورد نظر خود را انتخاب کنید:";
     $keyboard_buttons = [];
     foreach ($servers as $server) {
+        // دریافت نوع سرور برای نمایش "(به زودی)" برای پنل‌های جدید
+        $server_type = $server['type'] ?? '';
+        $server_name_display = $server['name'];
+        if (in_array($server_type, ['pasargad', 'rebecca'])) {
+            $server_name_display .= ' (به زودی)';
+        }
       
-        $keyboard_buttons[] = [['text' => "🖥 {$server['name']}", 'callback_data' => "show_plans_cat_{$category_id}_srv_{$server['id']}"]];
+        $keyboard_buttons[] = [['text' => "🖥 {$server_name_display}", 'callback_data' => "show_plans_cat_{$category_id}_srv_{$server['id']}"]];
     }
     $keyboard_buttons[] = [['text' => '◀️ بازگشت به دسته‌بندی‌ها', 'callback_data' => 'back_to_categories']];
+    
+    // اگر message_id ارائه شده و USER_INLINE_KEYBOARD فعال است، از editMessageText استفاده کن
+    if ($message_id !== null && USER_INLINE_KEYBOARD) {
+        editMessageText($chat_id, $message_id, $message, ['inline_keyboard' => $keyboard_buttons]);
+    } else {
     sendMessage($chat_id, $message, ['inline_keyboard' => $keyboard_buttons]);
+    }
 }
 
 function showAdminManagementMenu($chat_id) {
@@ -738,7 +843,14 @@ function handleMainMenu($chat_id, $first_name, $is_start_command = false) {
         $message = "به منوی اصلی بازگشتید. لطفا گزینه مورد نظر را انتخاب کنید.";
     }
 
-    $keyboard_buttons = [[['text' => '🛒 خرید سرویس']], [['text' => '💳 شارژ حساب'], ['text' => '👤 حساب کاربری']], [['text' => '🔧 سرویس‌های من'], ['text' => '📨 پشتیبانی']]];
+    $keyboard_buttons = [
+        [['text' => '🛒 خرید سرویس']], 
+        [['text' => '🔧 سرویس‌های من'], ['text' => '💳 شارژ حساب']], 
+        [['text' => '👤 حساب کاربری'], ['text' => '📨 پشتیبانی']],
+        [['text' => '📜 تاریخچه خریدها'], ['text' => '📚 راهنما']]
+    ];
+    
+    // حذف دکمه گزارش مشکلات - قابلیت مفیدتری نداریم
 
     $test_plan = getTestPlan();
     if ($test_plan) {
@@ -904,6 +1016,17 @@ function getPanelUser($username, $server_id) {
             return getSanaeiUser($username, $server_id);
         case 'marzneshin':
             return getMarzneshinUser($username, $server_id);
+        case 'hiddify':
+            require_once __DIR__ . '/../api/hiddify_api.php';
+            return getHiddifyUser($username, $server_id);
+        case 'alireza':
+            require_once __DIR__ . '/../api/alireza_api.php';
+            return getAlirezaUser($username, $server_id);
+        case 'pasargad':
+            return getPasargadUser($username, $server_id);
+        case 'txui':
+            require_once __DIR__ . '/../api/txui_api.php';
+            return getTxuiUser($username, $server_id);
         default:
             return false;
     }
@@ -914,16 +1037,57 @@ function createPanelUser($plan, $chat_id, $plan_id) {
     $stmt->execute([$plan['server_id']]);
     $type = $stmt->fetchColumn();
 
+    if (!$type) {
+        error_log("createPanelUser: Server type not found for server ID {$plan['server_id']}");
+        return ['error' => 'Server type not found', 'details' => "Server ID {$plan['server_id']} not found"];
+    }
+
     switch ($type) {
         case 'marzban':
-            return createMarzbanUser($plan, $chat_id, $plan_id);
+            require_once __DIR__ . '/../api/marzban_api.php';
+            $result = createMarzbanUser($plan, $chat_id, $plan_id);
+            break;
         case 'sanaei':
-            return createSanaeiUser($plan, $chat_id, $plan_id);
+            require_once __DIR__ . '/../api/sanaei_api.php';
+            $result = createSanaeiUser($plan, $chat_id, $plan_id);
+            break;
         case 'marzneshin':
-            return createMarzneshinUser($plan, $chat_id, $plan_id);
+            require_once __DIR__ . '/../api/marzneshin_api.php';
+            $result = createMarzneshinUser($plan, $chat_id, $plan_id);
+            break;
+        case 'hiddify':
+            require_once __DIR__ . '/../api/hiddify_api.php';
+            $result = createHiddifyUser($plan, $chat_id, $plan_id);
+            break;
+        case 'alireza':
+            require_once __DIR__ . '/../api/alireza_api.php';
+            $result = createAlirezaUser($plan, $chat_id, $plan_id);
+            break;
+        case 'pasargad':
+            require_once __DIR__ . '/../api/pasargad_api.php';
+            $result = createPasargadUser($plan, $chat_id, $plan_id);
+            break;
+        case 'txui':
+            require_once __DIR__ . '/../api/txui_api.php';
+            $result = createTxuiUser($plan, $chat_id, $plan_id);
+            break;
         default:
-            return false;
+            error_log("createPanelUser: Unknown server type: {$type}");
+            return ['error' => 'Unknown server type', 'details' => "Server type '{$type}' is not supported"];
     }
+    
+    // اگر نتیجه false است، یک آرایه خطا برگردان
+    if ($result === false) {
+        return ['error' => 'Panel user creation failed', 'details' => "Failed to create user in {$type} panel"];
+    }
+    
+    // اگر نتیجه یک آرایه است و دارای error است، آن را برگردان
+    if (is_array($result) && isset($result['error'])) {
+        return $result;
+    }
+    
+    // اگر نتیجه موفقیت‌آمیز است (دارای username است)
+    return $result;
 }
 
 function deletePanelUser($username, $server_id) {
@@ -933,11 +1097,26 @@ function deletePanelUser($username, $server_id) {
 
     switch ($type) {
         case 'marzban':
+            require_once __DIR__ . '/../api/marzban_api.php';
             return deleteMarzbanUser($username, $server_id);
         case 'sanaei':
+            require_once __DIR__ . '/../api/sanaei_api.php';
             return deleteSanaeiUser($username, $server_id);
         case 'marzneshin':
+            require_once __DIR__ . '/../api/marzneshin_api.php';
             return deleteMarzneshinUser($username, $server_id);
+        case 'hiddify':
+            require_once __DIR__ . '/../api/hiddify_api.php';
+            return deleteHiddifyUser($username, $server_id);
+        case 'alireza':
+            require_once __DIR__ . '/../api/alireza_api.php';
+            return deleteAlirezaUser($username, $server_id);
+        case 'pasargad':
+            require_once __DIR__ . '/../api/pasargad_api.php';
+            return deletePasargadUser($username, $server_id);
+        case 'txui':
+            require_once __DIR__ . '/../api/txui_api.php';
+            return deleteTxuiUser($username, $server_id);
         default:
             return false;
     }
@@ -950,11 +1129,26 @@ function modifyPanelUser($username, $server_id, $data) {
 
     switch ($type) {
         case 'marzban':
+            require_once __DIR__ . '/../api/marzban_api.php';
             return modifyMarzbanUser($username, $server_id, $data);
         case 'sanaei':
+            require_once __DIR__ . '/../api/sanaei_api.php';
             return modifySanaeiUser($username, $server_id, $data);
         case 'marzneshin':
+            require_once __DIR__ . '/../api/marzneshin_api.php';
             return modifyMarzneshinUser($username, $server_id, $data);
+        case 'hiddify':
+            require_once __DIR__ . '/../api/hiddify_api.php';
+            return updateHiddifyUser($username, $server_id, $data);
+        case 'alireza':
+            require_once __DIR__ . '/../api/alireza_api.php';
+            return updateAlirezaUser($username, $server_id, $data);
+        case 'pasargad':
+            require_once __DIR__ . '/../api/pasargad_api.php';
+            return updatePasargadUser($username, $server_id, $data);
+        case 'txui':
+            require_once __DIR__ . '/../api/txui_api.php';
+            return modifyTxuiUser($username, $server_id, $data);
         default:
             return false;
     }
@@ -973,8 +1167,21 @@ function showPlanEditor($chat_id, $message_id, $plan_id, $prompt = null)
     $message_text .= "➖➖➖➖➖➖➖➖➖➖\n";
     $message_text .= "▫️ نام: <code>{$plan['name']}</code>\n";
     $message_text .= "▫️ قیمت: <code>" . number_format($plan['price']) . "</code> تومان\n";
-    $message_text .= "▫️ حجم: <code>{$plan['volume_gb']}</code> گیگابایت\n";
-    $message_text .= "▫️ مدت: <code>{$plan['duration_days']}</code> روز\n";
+    // اگر پلن قابل تنظیم باشد
+    if (!empty($plan['custom_volume_enabled']) && $plan['custom_volume_enabled'] == 1) {
+        $message_text .= "⚙️ <b>پلن قابل تنظیم</b>\n";
+        $message_text .= "▫️ حداقل حجم: <code>" . ($plan['min_volume_gb'] ?? 0) . " GB</code>\n";
+        $message_text .= "▫️ حداکثر حجم: <code>" . ($plan['max_volume_gb'] ?? 0) . " GB</code>\n";
+        $message_text .= "▫️ حداقل روز: <code>" . ($plan['min_duration_days'] ?? 0) . " روز</code>\n";
+        $message_text .= "▫️ حداکثر روز: <code>" . ($plan['max_duration_days'] ?? 0) . " روز</code>\n";
+        $message_text .= "▫️ قیمت هر GB: <code>" . number_format($plan['price_per_gb'] ?? 0) . " تومان</code>\n";
+        $message_text .= "▫️ قیمت هر روز: <code>" . number_format($plan['price_per_day'] ?? 0) . " تومان</code>\n";
+    } else {
+        $volume_text = ($plan['volume_gb'] > 0) ? number_format($plan['volume_gb']) . " گیگابایت" : "نامحدود";
+        $duration_text = ($plan['duration_days'] > 0) ? number_format($plan['duration_days']) . " روز" : "نامحدود";
+        $message_text .= "▫️ حجم: <code>{$volume_text}</code>\n";
+        $message_text .= "▫️ مدت: <code>{$duration_text}</code>\n";
+    }
     $message_text .= "▫️ محدودیت خرید: <code>" . ($plan['purchase_limit'] == 0 ? 'نامحدود' : $plan['purchase_limit']) . "</code>\n";
     $message_text .= "➖➖➖➖➖➖➖➖➖➖";
 
@@ -1055,11 +1262,17 @@ function fetchAndParseSubscriptionUrl($sub_url, $server_id) {
     return array_filter($links_array);
 }
 
-function showPlansForCategoryAndServer($chat_id, $category_id, $server_id) {
+function showPlansForCategoryAndServer($chat_id, $category_id, $server_id, $message_id = null) {
     // دریافت نام دسته بندی و سرور برای نمایش در پیام
-    $category_name = pdo()->prepare("SELECT name FROM categories WHERE id = ?")->execute([$category_id]) ? pdo()->lastInsertId() : 'نامشخص';
-    $server_name = pdo()->prepare("SELECT name FROM servers WHERE id = ?")->execute([$server_id]) ? pdo()->lastInsertId() : 'نامشخص';
+    $category_stmt = pdo()->prepare("SELECT name FROM categories WHERE id = ?");
+    $category_stmt->execute([$category_id]);
+    $category_name = $category_stmt->fetchColumn() ?: 'نامشخص';
 
+    $server_stmt = pdo()->prepare("SELECT name, type FROM servers WHERE id = ?");
+    $server_stmt->execute([$server_id]);
+    $server_info = $server_stmt->fetch(PDO::FETCH_ASSOC);
+    $server_name = $server_info['name'] ?? 'نامشخص';
+    $server_type = $server_info['type'] ?? '';
 
     $stmt = pdo()->prepare("SELECT * FROM plans WHERE category_id = ? AND server_id = ? AND status = 'active' AND is_test_plan = 0");
     $stmt->execute([$category_id, $server_id]);
@@ -1069,19 +1282,41 @@ function showPlansForCategoryAndServer($chat_id, $category_id, $server_id) {
         sendMessage($chat_id, "متاسفانه پلن فعالی برای این سرور یافت نشد.");
         return;
     }
+    
+    // بررسی نوع پنل و نمایش "(به زودی)" برای پنل‌های جدید
+    $panel_status = '';
+    if (in_array($server_type, ['pasargad', 'txui'])) {
+        $panel_status = ' (به زودی)';
+    }
 
     $user_balance = getUserData($chat_id)['balance'] ?? 0;
-    $message = "🛍️ <b>پلن‌های سرور «{$server_name}»</b>\nموجودی شما: " . number_format($user_balance) . " تومان\n\nلطفا پلن مورد نظر خود را انتخاب کنید:";
+    $message = "🛍️ <b>پلن‌های سرور «{$server_name}»{$panel_status}</b>\nموجودی شما: " . number_format($user_balance) . " تومان\n\nلطفا پلن مورد نظر خود را انتخاب کنید:";
     $keyboard_buttons = [];
     foreach ($active_plans as $plan) {
-        $button_text = "{$plan['name']} | {$plan['volume_gb']}GB | " . number_format($plan['price']) . " تومان";
+        // اگر پلن قابل تنظیم باشد
+        if (!empty($plan['custom_volume_enabled']) && $plan['custom_volume_enabled'] == 1) {
+            $min_vol = $plan['min_volume_gb'] ?? 1;
+            $max_vol = $plan['max_volume_gb'] ?? 1000;
+            $min_days = $plan['min_duration_days'] ?? 1;
+            $max_days = $plan['max_duration_days'] ?? 365;
+            $button_text = "{$plan['name']} | ⚙️ قابل تنظیم ({$min_vol}-{$max_vol}GB, {$min_days}-{$max_days}روز)";
+        } else {
+            $volume_text = ($plan['volume_gb'] > 0) ? number_format($plan['volume_gb']) . "GB" : "نامحدود";
+            $button_text = "{$plan['name']} | {$volume_text} | " . number_format($plan['price']) . " تومان";
+        }
         $keyboard_buttons[] = [['text' => $button_text, 'callback_data' => "buy_plan_{$plan['id']}"]];
     }
     // فرمت callback جدید برای کد تخفیف: apply_discount_code_{cat_ID}_{srv_ID}
     $keyboard_buttons[] = [['text' => '🎁 اعمال کد تخفیف', 'callback_data' => "apply_discount_code_{$category_id}_{$server_id}"]];
     // دکمه بازگشت به لیست سرورها برای همان دسته بندی
     $keyboard_buttons[] = [['text' => '◀️ بازگشت به انتخاب سرور', 'callback_data' => 'cat_' . $category_id]];
+    
+    // اگر message_id ارائه شده و USER_INLINE_KEYBOARD فعال است، از editMessageText استفاده کن
+    if ($message_id !== null && USER_INLINE_KEYBOARD) {
+        editMessageText($chat_id, $message_id, $message, ['inline_keyboard' => $keyboard_buttons]);
+    } else {
     sendMessage($chat_id, $message, ['inline_keyboard' => $keyboard_buttons]);
+    }
 }
 
 function applyRenewal($chat_id, $username, $days_to_add, $gb_to_add) {
@@ -1241,17 +1476,72 @@ function createZarinpalLink($chat_id, $amount, $description, $metadata = []) {
     }
 }
 
-function completePurchase($user_id, $plan_id, $custom_name, $final_price, $discount_code, $discount_object, $discount_applied) {
+function completePurchase($user_id, $plan_id, $custom_name, $final_price, $discount_code, $discount_object, $discount_applied, $custom_volume_gb = null, $custom_duration_days = null) {
     $plan = getPlanById($plan_id);
     $user_data = getUserData($user_id);
     $first_name = $user_data['first_name'];
 
+    // اگر حجم و روز سفارشی ارسال شده باشد، از آنها استفاده کن
+    if ($custom_volume_gb !== null && $custom_duration_days !== null) {
+        $plan['volume_gb'] = $custom_volume_gb;
+        $plan['duration_days'] = $custom_duration_days;
+    }
+
     // ساخت نام کاربری کامل و یکتا برای پنل
+    // استفاده از سیستم نام‌گذاری کانفیگ
+    if (class_exists('ConfigNaming')) {
+        $configNaming = ConfigNaming::getInstance();
+        $settings = getSettings();
+        $prefix = $settings['config_prefix'] ?? '';
+        
+        // اگر prefix تنظیم شده، از سیستم جدید استفاده کن
+        if (!empty($prefix)) {
+            $configName = $configNaming->generateConfigName();
+            $plan['full_username'] = $configName;
+        } else {
+            // اگر prefix تنظیم نشده، از روش قدیمی استفاده کن
     $plan['full_username'] = preg_replace('/[^a-zA-Z0-9_.]/', '', $custom_name) . '_user' . $user_id . '_' . time();
+        }
+    } else {
+        // Fallback به روش قدیمی
+        $plan['full_username'] = preg_replace('/[^a-zA-Z0-9_.]/', '', $custom_name) . '_user' . $user_id . '_' . time();
+    }
 
 
     $panel_user_data = createPanelUser($plan, $user_id, $plan_id);
-    if ($panel_user_data && isset($panel_user_data['username'])) {
+    
+    // بررسی خطا
+    if (!$panel_user_data || (is_array($panel_user_data) && isset($panel_user_data['error']))) {
+        $error_message = "❌ متاسفانه در ایجاد سرویس شما مشکلی پیش آمد. لطفا با پشتیبانی تماس بگیرید. مبلغی از حساب شما کسر نشده است.";
+        $error_details = '';
+        
+        if (is_array($panel_user_data) && isset($panel_user_data['error'])) {
+            $error_details = $panel_user_data['error'];
+            if (isset($panel_user_data['details'])) {
+                $error_details .= " - " . (is_string($panel_user_data['details']) ? $panel_user_data['details'] : json_encode($panel_user_data['details'], JSON_UNESCAPED_UNICODE));
+            }
+        } else {
+            $error_details = 'Unknown error - createPanelUser returned false or invalid response';
+        }
+        
+        error_log("completePurchase failed for user {$user_id}, plan {$plan_id}: {$error_details}");
+        
+        return [
+            'success' => false,
+            'error_message' => $error_message,
+            'error_details' => $error_details,
+            'panel_error' => $panel_user_data
+        ];
+    }
+    
+    if (isset($panel_user_data['username'])) {
+        // ارسال لاگ خرید
+        if (class_exists('LogManager')) {
+            $logManager = LogManager::getInstance();
+            $logManager->logPurchase($user_id, $plan_id, $final_price, $plan['name']);
+            $logManager->logConfigCreate($user_id, $panel_user_data['username'], $plan_id);
+        }
+        
         if ($plan['is_test_plan'] == 1) {
             pdo()->prepare("UPDATE users SET test_config_count = test_config_count + 1 WHERE chat_id = ?")->execute([$user_id]);
         } else {
@@ -1266,7 +1556,15 @@ function completePurchase($user_id, $plan_id, $custom_name, $final_price, $disco
             pdo()->prepare("UPDATE discount_codes SET usage_count = usage_count + 1 WHERE id = ?")->execute([$discount_object['id']]);
         }
         
-        $expire_timestamp = $panel_user_data['expire'] ?? (isset($panel_user_data['expire_date']) ? strtotime($panel_user_data['expire_date']) : (time() + $plan['duration_days'] * 86400));
+        // محاسبه expire_timestamp - پشتیبانی از زمان نامحدود
+        $expire_timestamp = 0; // 0 به معنای نامحدود
+        if (isset($panel_user_data['expire']) && $panel_user_data['expire'] > 0) {
+            $expire_timestamp = $panel_user_data['expire'];
+        } elseif (isset($panel_user_data['expire_date']) && $panel_user_data['expire_date'] !== 'نامحدود' && !empty($panel_user_data['expire_date'])) {
+            $expire_timestamp = strtotime($panel_user_data['expire_date']);
+        } elseif (!empty($plan['duration_days']) && $plan['duration_days'] > 0) {
+            $expire_timestamp = time() + ($plan['duration_days'] * 86400);
+        }
         
         saveUserService($user_id, [
             'server_id' => $plan['server_id'],
@@ -1275,7 +1573,7 @@ function completePurchase($user_id, $plan_id, $custom_name, $final_price, $disco
             'plan_id' => $plan_id,
             'sub_url' => $panel_user_data['subscription_url'],
             'expire_timestamp' => $expire_timestamp,
-            'volume_gb' => $plan['volume_gb'],
+            'volume_gb' => $plan['volume_gb'] > 0 ? $plan['volume_gb'] : 0, // 0 به معنای نامحدود
         ]);
         
         $new_balance = $user_data['balance'] - $final_price;
@@ -1284,10 +1582,21 @@ function completePurchase($user_id, $plan_id, $custom_name, $final_price, $disco
 
         $caption = "✅ <b>خرید شما با موفقیت انجام شد.</b>\n";
         if ($discount_applied) {
-            $caption .= "🏷 قیمت اصلی: " . number_format($plan['price']) . " تومان\n";
+            $base_price_display = ($custom_volume_gb !== null && $custom_duration_days !== null) ? number_format($final_price / (1 - ($discount_object['value'] / 100))) : number_format($plan['price'] ?? $final_price);
+            $caption .= "🏷 قیمت اصلی: " . $base_price_display . " تومان\n";
             $caption .= "💰 قیمت با تخفیف: <b>" . number_format($final_price) . " تومان</b>\n";
         }
-        $caption .= "\n▫️ نام سرویس: <b>" . htmlspecialchars($custom_name) . "</b>\n\n";
+        $caption .= "\n▫️ نام سرویس: <b>" . htmlspecialchars($custom_name) . "</b>\n";
+        
+        // نمایش حجم و روز اگر پلن قابل تنظیم باشد
+        if ($custom_volume_gb !== null && $custom_duration_days !== null) {
+            $volume_text = ($custom_volume_gb > 0) ? number_format($custom_volume_gb) . " گیگابایت" : "نامحدود";
+            $duration_text = ($custom_duration_days > 0) ? number_format($custom_duration_days) . " روز" : "نامحدود";
+            $caption .= "▫️ حجم: <b>{$volume_text}</b>\n";
+            $caption .= "▫️ مدت زمان: <b>{$duration_text}</b>\n";
+        }
+        
+        $caption .= "\n";
 
         if ($plan['show_sub_link']) {
             $caption .= "🔗 لینک اشتراک (Subscription):\n<code>" . htmlspecialchars($sub_link) . "</code>\n\n";
@@ -1304,9 +1613,18 @@ function completePurchase($user_id, $plan_id, $custom_name, $final_price, $disco
         $admin_notification .= $profile_link_html;
         $admin_notification .= "🛍️ پلن: {$plan['name']}\n";
         $admin_notification .= "💬 نام سرویس: " . htmlspecialchars($custom_name) . "\n";
+        
+        // نمایش حجم و روز اگر پلن قابل تنظیم باشد
+        if ($custom_volume_gb !== null && $custom_duration_days !== null) {
+            $volume_text = ($custom_volume_gb > 0) ? number_format($custom_volume_gb) . " گیگابایت" : "نامحدود";
+            $duration_text = ($custom_duration_days > 0) ? number_format($custom_duration_days) . " روز" : "نامحدود";
+            $admin_notification .= "📊 حجم: {$volume_text}\n";
+            $admin_notification .= "⏰ مدت زمان: {$duration_text}\n";
+        }
 
         if ($discount_applied) {
-            $admin_notification .= "💵 قیمت اصلی: " . number_format($plan['price']) . " تومان\n";
+            $base_price_display = ($custom_volume_gb !== null && $custom_duration_days !== null) ? number_format($final_price / (1 - ($discount_object['value'] / 100))) : number_format($plan['price'] ?? $final_price);
+            $admin_notification .= "💵 قیمت اصلی: " . $base_price_display . " تومان\n";
             $admin_notification .= "🏷 کد تخفیف: <code>{$discount_code}</code>\n";
             $admin_notification .= "💳 مبلغ پرداخت شده: <b>" . number_format($final_price) . " تومان</b>";
         } else {
@@ -1317,6 +1635,13 @@ function completePurchase($user_id, $plan_id, $custom_name, $final_price, $disco
         if ($plan['show_conf_links'] && !empty($panel_user_data['links'])) {
             $keyboard_buttons[] = [['text' => '📋 دریافت کانفیگ‌ها', 'callback_data' => "get_configs_{$panel_user_data['username']}"]];
         }
+        
+        // اضافه کردن دکمه مشاهده مشخصات اکانت (web_app)
+        if (!empty($panel_user_data['subscription_url'])) {
+            $base_url = 'https://' . $_SERVER['HTTP_HOST'] . rtrim(dirname($_SERVER['PHP_SELF']), '/');
+            $view_url = $base_url . '/view_subscription.php?link=' . urlencode($panel_user_data['subscription_url']);
+            $keyboard_buttons[] = [['text' => '👁️ مشاهده مشخصات اکانت', 'web_app' => ['url' => $view_url]]];
+        }
 
         return [
             'success' => true,
@@ -1324,6 +1649,7 @@ function completePurchase($user_id, $plan_id, $custom_name, $final_price, $disco
             'qr_code_url' => $qr_code_url,
             'keyboard' => ['inline_keyboard' => $keyboard_buttons],
             'admin_notification' => $admin_notification,
+            'subscription_url' => $panel_user_data['subscription_url'] ?? '',
         ];
     }
     

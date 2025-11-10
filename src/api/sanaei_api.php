@@ -1,5 +1,11 @@
 <?php
 
+/**
+ * API Integration برای پنل Sanaei (3X-UI)
+ * پشتیبانی از ایجاد، حذف و مدیریت کاربران
+ * این پنل از x-ui استفاده می‌کند و از cookie-based authentication استفاده می‌کند
+ */
+
 // --- توابع پایه  ---
 
 function getSanaeiCookie($server_id) {
@@ -108,9 +114,20 @@ function createSanaeiUser($plan, $chat_id, $plan_id) {
     $uuid = generateUUID();
     $email = $plan['full_username'];
     $subId = generateUUID(16);
-    $expire_time = ($plan['duration_days'] > 0) ? (time() + $plan['duration_days'] * 86400) * 1000 : 0;
-    $total_bytes = ($plan['volume_gb'] > 0) ? $plan['volume_gb'] * 1024 * 1024 * 1024 : 0;
-    $client_settings = [ "id" => $uuid, "email" => $email, "totalGB" => $total_bytes, "expiryTime" => $expire_time, "enable" => true, "tgId" => (string)$chat_id, "subId" => $subId ];
+    // پشتیبانی از زمان نامحدود (اگر duration_days صفر یا null باشد)
+    $expire_time = 0; // 0 به معنای نامحدود در سنایی
+    if (!empty($plan['duration_days']) && $plan['duration_days'] > 0) {
+        $expire_time = (time() + $plan['duration_days'] * 86400) * 1000;
+    }
+    
+    // پشتیبانی از حجم نامحدود (اگر volume_gb صفر یا null باشد)
+    // توجه: در سنایی، totalGB باید به GB باشد نه bytes (0 به معنای نامحدود)
+    $totalGB = 0; // 0 به معنای نامحدود در سنایی
+    if (!empty($plan['volume_gb']) && $plan['volume_gb'] > 0) {
+        $totalGB = $plan['volume_gb']; // سنایی از GB استفاده می‌کند، نه bytes
+    }
+    
+    $client_settings = [ "id" => $uuid, "email" => $email, "totalGB" => $totalGB, "expiryTime" => $expire_time, "enable" => true, "tgId" => (string)$chat_id, "subId" => $subId ];
     $data = ['id' => (int)$inbound_id, 'settings' => json_encode(['clients' => [$client_settings]])];
     $response = sanaeiApiRequest('/panel/api/inbounds/addClient', $server_id, 'POST', $data);
 

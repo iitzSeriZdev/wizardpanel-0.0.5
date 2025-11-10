@@ -115,13 +115,24 @@ function createMarzneshinUser($plan, $chat_id, $plan_id) {
     if (!$server_info) return false;
 
     $base_sub_url = !empty($server_info['sub_host']) ? rtrim($server_info['sub_host'], '/') : rtrim($server_info['url'], '/');
+    
     $userData = [
         'username' => $username,
-        'data_limit' => $plan['volume_gb'] * 1024 * 1024 * 1024,
-        'expire_date' => date('c', time() + $plan['duration_days'] * 86400),
         'service_ids' => [(int)$service_id],
         'expire_strategy' => 'fixed_date'
     ];
+    
+    // پشتیبانی از حجم نامحدود (اگر volume_gb صفر یا null باشد)
+    if (!empty($plan['volume_gb']) && $plan['volume_gb'] > 0) {
+        $userData['data_limit'] = $plan['volume_gb'] * 1024 * 1024 * 1024; // تبدیل GB به bytes
+    }
+    // اگر volume_gb صفر یا null باشد، فیلد data_limit ارسال نمی‌شود (یعنی نامحدود)
+    
+    // پشتیبانی از زمان نامحدود (اگر duration_days صفر یا null باشد)
+    if (!empty($plan['duration_days']) && $plan['duration_days'] > 0) {
+        $userData['expire_date'] = date('c', time() + $plan['duration_days'] * 86400);
+    }
+    // اگر duration_days صفر یا null باشد، فیلد expire_date ارسال نمی‌شود (یعنی نامحدود)
 
     $response = marzneshinApiRequest('/api/users', $server_id, 'POST', $userData);
     

@@ -152,10 +152,20 @@ function createMarzbanUser($plan, $chat_id, $plan_id) {
         'username' => $username,
         'proxies' => $proxies, 
         'inbounds' => new stdClass(),
-        'expire' => time() + $plan['duration_days'] * 86400,
-        'data_limit' => $plan['volume_gb'] * 1024 * 1024 * 1024,
         'data_limit_reset_strategy' => 'no_reset',
     ];
+    
+    // پشتیبانی از حجم نامحدود (اگر volume_gb صفر یا null باشد)
+    if (!empty($plan['volume_gb']) && $plan['volume_gb'] > 0) {
+        $userData['data_limit'] = $plan['volume_gb'] * 1024 * 1024 * 1024; // تبدیل GB به bytes
+    }
+    // اگر volume_gb صفر یا null باشد، فیلد data_limit ارسال نمی‌شود (یعنی نامحدود)
+    
+    // پشتیبانی از زمان نامحدود (اگر duration_days صفر یا null باشد)
+    if (!empty($plan['duration_days']) && $plan['duration_days'] > 0) {
+        $userData['expire'] = time() + $plan['duration_days'] * 86400;
+    }
+    // اگر duration_days صفر یا null باشد، فیلد expire ارسال نمی‌شود (یعنی نامحدود)
 
     $response = marzbanApiRequest('/api/user', $server_id, 'POST', $userData, $accessToken);
 

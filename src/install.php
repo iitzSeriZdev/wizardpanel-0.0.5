@@ -27,6 +27,80 @@ function generateRandomString(int $length = 32): string {
     return bin2hex(random_bytes($length / 2));
 }
 
+/**
+ * تنظیم Webhook با secret_token
+ * @param string $bot_token توکن ربات
+ * @param string $webhook_url آدرس Webhook
+ * @param string $secret_token Secret Token
+ * @return array ['success' => bool, 'message' => string, 'error' => string|null]
+ */
+function setTelegramWebhook(string $bot_token, string $webhook_url, string $secret_token): array {
+    $set_webhook_url = "https://api.telegram.org/bot$bot_token/setWebhook";
+    $webhook_data = [
+        'url' => $webhook_url,
+        'secret_token' => $secret_token,
+        'drop_pending_updates' => true
+    ];
+    
+    $ch = curl_init($set_webhook_url);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($webhook_data));
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+    
+    $response = curl_exec($ch);
+    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curl_error = curl_error($ch);
+    curl_close($ch);
+    
+    if ($curl_error) {
+        return [
+            'success' => false,
+            'message' => 'خطا در اتصال به Telegram API',
+            'error' => $curl_error
+        ];
+    }
+    
+    $response_data = json_decode($response, true);
+    
+    if ($http_code === 200 && isset($response_data['ok']) && $response_data['ok']) {
+        // بررسی نهایی Webhook
+        $get_webhook_url = "https://api.telegram.org/bot$bot_token/getWebhookInfo";
+        $ch = curl_init($get_webhook_url);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+        $webhook_info = curl_exec($ch);
+        curl_close($ch);
+        
+        $webhook_check = json_decode($webhook_info, true);
+        $verified = false;
+        if ($webhook_check['ok'] && isset($webhook_check['result']['url'])) {
+            $webhook_url_set = $webhook_check['result']['url'];
+            $verified = ($webhook_url_set === $webhook_url);
+        }
+        
+        return [
+            'success' => true,
+            'message' => 'وبهوک با secret_token با موفقیت تنظیم شد' . ($verified ? ' و تأیید شد' : ''),
+            'error' => null,
+            'verified' => $verified
+        ];
+    } else {
+        $error_desc = $response_data['description'] ?? 'پاسخ نامعتبر از تلگرام';
+        $error_code = $response_data['error_code'] ?? null;
+        return [
+            'success' => false,
+            'message' => "خطا در ثبت وبهوک: $error_desc",
+            'error' => $error_desc,
+            'error_code' => $error_code,
+            'http_code' => $http_code
+        ];
+    }
+}
+
 function getDbBaseSchemaSQL(): string {
     return "
     CREATE TABLE IF NOT EXISTS `users` ( `chat_id` BIGINT NOT NULL, `first_name` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci, `balance` DECIMAL(10,2) NOT NULL DEFAULT 0.00, `user_state` VARCHAR(255) DEFAULT 'main_menu', `state_data` TEXT, `status` VARCHAR(20) NOT NULL DEFAULT 'active', `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (`chat_id`) ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -36,8 +110,9 @@ function getDbBaseSchemaSQL(): string {
     CREATE TABLE IF NOT EXISTS `plans` ( `id` INT AUTO_INCREMENT PRIMARY KEY, `server_id` INT NOT NULL, `category_id` INT NOT NULL, `name` VARCHAR(255) NOT NULL, `price` DECIMAL(10,2) NOT NULL, `volume_gb` INT NOT NULL, `duration_days` INT NOT NULL, `description` TEXT, `show_sub_link` TINYINT(1) NOT NULL DEFAULT 1, `show_conf_links` TINYINT(1) NOT NULL DEFAULT 1, `status` VARCHAR(20) NOT NULL DEFAULT 'active' ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     CREATE TABLE IF NOT EXISTS `services` ( `id` INT AUTO_INCREMENT PRIMARY KEY, `server_id` INT NOT NULL, `owner_chat_id` BIGINT NOT NULL, `marzban_username` VARCHAR(255) NOT NULL, `custom_name` VARCHAR(255) NULL DEFAULT NULL, `plan_id` INT NOT NULL, `sub_url` TEXT, `purchase_date` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, `expire_timestamp` BIGINT, `volume_gb` INT, `warning_sent` TINYINT(1) NOT NULL DEFAULT 0 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     CREATE TABLE IF NOT EXISTS `settings` ( `setting_key` VARCHAR(255) NOT NULL PRIMARY KEY, `setting_value` TEXT ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-    CREATE TABLE IF NOT EXISTS `tickets` ( `id` VARCHAR(50) NOT NULL PRIMARY KEY, `user_id` BIGINT NOT NULL, `user_name` VARCHAR(255), `subject` VARCHAR(255), `status` VARCHAR(20) NOT NULL DEFAULT 'open', `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-    CREATE TABLE IF NOT EXISTS `ticket_conversations` ( `id` INT AUTO_INCREMENT PRIMARY KEY, `ticket_id` VARCHAR(50) NOT NULL, `sender` VARCHAR(10) NOT NULL, `message_text` TEXT, `sent_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    CREATE TABLE IF NOT EXISTS `tickets` ( `id` VARCHAR(50) NOT NULL PRIMARY KEY, `user_id` BIGINT NOT NULL, `user_name` VARCHAR(255), `subject` VARCHAR(255), `status` VARCHAR(20) NOT NULL DEFAULT 'open', `priority` VARCHAR(20) NOT NULL DEFAULT 'normal', `category` VARCHAR(50) DEFAULT NULL, `assigned_to` BIGINT NULL DEFAULT NULL, `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP, `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    CREATE TABLE IF NOT EXISTS `ticket_conversations` ( `id` INT AUTO_INCREMENT PRIMARY KEY, `ticket_id` VARCHAR(50) NOT NULL, `sender` VARCHAR(10) NOT NULL, `sender_id` BIGINT NOT NULL, `message_text` TEXT, `sent_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP, INDEX `ticket_id` (`ticket_id`) ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    CREATE TABLE IF NOT EXISTS `ticket_attachments` ( `id` INT AUTO_INCREMENT PRIMARY KEY, `ticket_id` VARCHAR(50) NOT NULL, `conversation_id` INT NOT NULL, `file_id` VARCHAR(255) NOT NULL, `file_type` VARCHAR(20) NOT NULL, `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP, INDEX `ticket_id` (`ticket_id`), INDEX `conversation_id` (`conversation_id`) ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     CREATE TABLE IF NOT EXISTS `cache` ( `cache_key` VARCHAR(255) NOT NULL PRIMARY KEY, `cache_value` TEXT, `expire_at` INT ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     CREATE TABLE IF NOT EXISTS `discount_codes` ( `id` INT AUTO_INCREMENT PRIMARY KEY, `code` VARCHAR(50) NOT NULL UNIQUE, `type` VARCHAR(10) NOT NULL, `value` DECIMAL(10,2) NOT NULL, `max_usage` INT NOT NULL, `usage_count` INT NOT NULL DEFAULT 0, `status` VARCHAR(20) NOT NULL DEFAULT 'active' ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     CREATE TABLE IF NOT EXISTS `guides` ( `id` INT AUTO_INCREMENT PRIMARY KEY, `button_name` VARCHAR(255) NOT NULL, `content_type` VARCHAR(10) NOT NULL, `message_text` TEXT, `photo_id` VARCHAR(255) DEFAULT NULL, `inline_keyboard` TEXT, `status` VARCHAR(20) NOT NULL DEFAULT 'active' ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -61,11 +136,24 @@ function getDbBaseSchemaSQL(): string {
   `ref_id` varchar(50) DEFAULT NULL,
   `description` varchar(255) DEFAULT NULL,
   `metadata` TEXT DEFAULT NULL,
+  `gateway` varchar(50) DEFAULT 'zarinpal',
   `status` varchar(20) NOT NULL DEFAULT 'pending',
   `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `verified_at` timestamp NULL DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `authority` (`authority`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    CREATE TABLE IF NOT EXISTS `affiliate_transactions` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `referrer_id` bigint(20) NOT NULL,
+  `referred_id` bigint(20) NOT NULL,
+  `purchase_amount` decimal(10,2) NOT NULL,
+  `commission_amount` decimal(10,2) NOT NULL,
+  `status` varchar(20) NOT NULL DEFAULT 'pending',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `referrer_id` (`referrer_id`),
+  KEY `referred_id` (`referred_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     ";
 }
@@ -139,6 +227,36 @@ function runDbUpgrades(PDO $pdo): array {
         $pdo->exec("ALTER TABLE `plans` ADD `purchase_count` INT NOT NULL DEFAULT 0 AFTER `purchase_limit`;");
         $messages[] = "✅ ستون `purchase_count` برای شمارش خرید پلن‌ها اضافه شد.";
     }
+    
+    // ستون‌های جدید برای پلن قابل تنظیم (Custom Volume/Duration)
+    if (!columnExists($pdo, 'plans', 'custom_volume_enabled')) {
+        $pdo->exec("ALTER TABLE `plans` ADD `custom_volume_enabled` TINYINT(1) NOT NULL DEFAULT 0 AFTER `purchase_count`;");
+        $messages[] = "✅ ستون `custom_volume_enabled` برای پلن قابل تنظیم اضافه شد.";
+    }
+    if (!columnExists($pdo, 'plans', 'min_volume_gb')) {
+        $pdo->exec("ALTER TABLE `plans` ADD `min_volume_gb` INT NOT NULL DEFAULT 0 AFTER `custom_volume_enabled`;");
+        $messages[] = "✅ ستون `min_volume_gb` برای حداقل حجم اضافه شد.";
+    }
+    if (!columnExists($pdo, 'plans', 'max_volume_gb')) {
+        $pdo->exec("ALTER TABLE `plans` ADD `max_volume_gb` INT NOT NULL DEFAULT 0 AFTER `min_volume_gb`;");
+        $messages[] = "✅ ستون `max_volume_gb` برای حداکثر حجم اضافه شد.";
+    }
+    if (!columnExists($pdo, 'plans', 'min_duration_days')) {
+        $pdo->exec("ALTER TABLE `plans` ADD `min_duration_days` INT NOT NULL DEFAULT 0 AFTER `max_volume_gb`;");
+        $messages[] = "✅ ستون `min_duration_days` برای حداقل روز اضافه شد.";
+    }
+    if (!columnExists($pdo, 'plans', 'max_duration_days')) {
+        $pdo->exec("ALTER TABLE `plans` ADD `max_duration_days` INT NOT NULL DEFAULT 0 AFTER `min_duration_days`;");
+        $messages[] = "✅ ستون `max_duration_days` برای حداکثر روز اضافه شد.";
+    }
+    if (!columnExists($pdo, 'plans', 'price_per_gb')) {
+        $pdo->exec("ALTER TABLE `plans` ADD `price_per_gb` DECIMAL(10,2) NOT NULL DEFAULT 0.00 AFTER `max_duration_days`;");
+        $messages[] = "✅ ستون `price_per_gb` برای قیمت هر گیگابایت اضافه شد.";
+    }
+    if (!columnExists($pdo, 'plans', 'price_per_day')) {
+        $pdo->exec("ALTER TABLE `plans` ADD `price_per_day` DECIMAL(10,2) NOT NULL DEFAULT 0.00 AFTER `price_per_gb`;");
+        $messages[] = "✅ ستون `price_per_day` برای قیمت هر روز اضافه شد.";
+    }
     if (!columnExists($pdo, 'users', 'is_verified')) {
         $pdo->exec("ALTER TABLE `users` ADD `is_verified` TINYINT(1) NOT NULL DEFAULT 0 AFTER `test_config_count`;");
         $messages[] = "✅ ستون `is_verified` برای وضعیت احراز هویت کاربران اضافه شد.";
@@ -166,6 +284,85 @@ function runDbUpgrades(PDO $pdo): array {
     if (!columnExists($pdo, 'services', 'custom_name')) {
         $pdo->exec("ALTER TABLE `services` ADD `custom_name` VARCHAR(255) NULL DEFAULT NULL AFTER `marzban_username`;");
         $messages[] = "✅ ستون `custom_name` برای نام دلخواه سرویس به جدول `services` اضافه شد.";
+    }
+    
+    // افزودن ستون‌های Affiliate
+    if (!columnExists($pdo, 'users', 'referrer_id')) {
+        $pdo->exec("ALTER TABLE `users` ADD `referrer_id` BIGINT NULL DEFAULT NULL AFTER `status`;");
+        $messages[] = "✅ ستون `referrer_id` برای سیستم Affiliate اضافه شد.";
+    }
+    if (!columnExists($pdo, 'users', 'referrals_count')) {
+        $pdo->exec("ALTER TABLE `users` ADD `referrals_count` INT NOT NULL DEFAULT 0 AFTER `referrer_id`;");
+        $messages[] = "✅ ستون `referrals_count` برای شمارش معرفی‌ها اضافه شد.";
+    }
+    if (!columnExists($pdo, 'users', 'affiliate_earnings')) {
+        $pdo->exec("ALTER TABLE `users` ADD `affiliate_earnings` DECIMAL(10,2) NOT NULL DEFAULT 0.00 AFTER `referrals_count`;");
+        $messages[] = "✅ ستون `affiliate_earnings` برای درآمد Affiliate اضافه شد.";
+    }
+    
+    // افزودن ستون gateway به transactions
+    if (!columnExists($pdo, 'transactions', 'gateway')) {
+        $pdo->exec("ALTER TABLE `transactions` ADD `gateway` VARCHAR(50) DEFAULT 'zarinpal' AFTER `metadata`;");
+        $messages[] = "✅ ستون `gateway` برای شناسایی درگاه پرداخت اضافه شد.";
+    }
+    
+    // ایجاد جدول affiliate_transactions در صورت عدم وجود
+    try {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS `affiliate_transactions` (
+            `id` int(11) NOT NULL AUTO_INCREMENT,
+            `referrer_id` bigint(20) NOT NULL,
+            `referred_id` bigint(20) NOT NULL,
+            `purchase_amount` decimal(10,2) NOT NULL,
+            `commission_amount` decimal(10,2) NOT NULL,
+            `status` varchar(20) NOT NULL DEFAULT 'pending',
+            `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`id`),
+            KEY `referrer_id` (`referrer_id`),
+            KEY `referred_id` (`referred_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+        $messages[] = "✅ جدول `affiliate_transactions` ایجاد شد.";
+    } catch (PDOException $e) {
+        // جدول از قبل وجود دارد
+    }
+    
+    // ارتقای جدول tickets برای سیستم تیکتینگ حرفه‌ای
+    if (!columnExists($pdo, 'tickets', 'priority')) {
+        $pdo->exec("ALTER TABLE `tickets` ADD `priority` VARCHAR(20) NOT NULL DEFAULT 'normal' AFTER `status`");
+        $messages[] = "✅ ستون `priority` به جدول `tickets` اضافه شد.";
+    }
+    if (!columnExists($pdo, 'tickets', 'category')) {
+        $pdo->exec("ALTER TABLE `tickets` ADD `category` VARCHAR(50) DEFAULT NULL AFTER `priority`");
+        $messages[] = "✅ ستون `category` به جدول `tickets` اضافه شد.";
+    }
+    if (!columnExists($pdo, 'tickets', 'assigned_to')) {
+        $pdo->exec("ALTER TABLE `tickets` ADD `assigned_to` BIGINT NULL DEFAULT NULL AFTER `category`");
+        $messages[] = "✅ ستون `assigned_to` به جدول `tickets` اضافه شد.";
+    }
+    if (!columnExists($pdo, 'tickets', 'updated_at')) {
+        $pdo->exec("ALTER TABLE `tickets` ADD `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER `created_at`");
+        $messages[] = "✅ ستون `updated_at` به جدول `tickets` اضافه شد.";
+    }
+    if (!columnExists($pdo, 'ticket_conversations', 'sender_id')) {
+        $pdo->exec("ALTER TABLE `ticket_conversations` ADD `sender_id` BIGINT NOT NULL DEFAULT 0 AFTER `sender`");
+        $messages[] = "✅ ستون `sender_id` به جدول `ticket_conversations` اضافه شد.";
+    }
+    
+    // ایجاد جدول ticket_attachments
+    try {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS `ticket_attachments` (
+            `id` int(11) NOT NULL AUTO_INCREMENT,
+            `ticket_id` varchar(50) NOT NULL,
+            `conversation_id` int(11) NOT NULL,
+            `file_id` varchar(255) NOT NULL,
+            `file_type` varchar(20) NOT NULL,
+            `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`id`),
+            KEY `ticket_id` (`ticket_id`),
+            KEY `conversation_id` (`conversation_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+        $messages[] = "✅ جدول `ticket_attachments` ایجاد شد.";
+    } catch (PDOException $e) {
+        // جدول از قبل وجود دارد
     }
 
     return $messages;
@@ -204,7 +401,27 @@ elseif ($step === 3) {
             $pdo->exec(getDbBaseSchemaSQL());
             $successMessages[] = "✅ ساختار پایه جداول با موفقیت ایجاد/بررسی شد.";
             
+            // بررسی اینکه آیا config.php از قبل وجود دارد (برای upgrade)
+            $is_upgrade = file_exists($configFile) && filesize($configFile) > 10;
+            $existing_secret_token = null;
+            
+            if ($is_upgrade) {
+                // خواندن SECRET_TOKEN موجود
+                require_once $configFile;
+                if (defined('SECRET_TOKEN') && SECRET_TOKEN !== 'SECRET' && !empty(SECRET_TOKEN)) {
+                    $existing_secret_token = SECRET_TOKEN;
+                    $secretToken = $existing_secret_token;
+                    $successMessages[] = "ℹ️ از SECRET_TOKEN موجود استفاده شد (ارتقا).";
+                } else {
+                    // اگر SECRET_TOKEN موجود نیست یا default است، یک عدد جدید تولید کن
+                    $secretToken = generateRandomString(64);
+                    $successMessages[] = "⚠️ SECRET_TOKEN جدید تولید شد (SECRET_TOKEN قبلی موجود نبود).";
+                }
+            } else {
+                // نصب جدید - تولید SECRET_TOKEN جدید
             $secretToken = generateRandomString(64);
+            }
+            
             $config_content = '<?php' . PHP_EOL . PHP_EOL;
             $config_content .= "define('DB_HOST', '{$db_host}');" . PHP_EOL;
             $config_content .= "define('DB_NAME', '{$db_name}');" . PHP_EOL;
@@ -214,7 +431,7 @@ elseif ($step === 3) {
             $config_content .= "define('ADMIN_CHAT_ID', {$admin_id});" . PHP_EOL;
             $config_content .= "define('SECRET_TOKEN', '{$secretToken}');" . PHP_EOL;
             file_put_contents($configFile, $config_content);
-            $successMessages[] = "✅ فایل کانفیگ با موفقیت ایجاد شد.";
+            $successMessages[] = "✅ فایل کانفیگ با موفقیت ایجاد/به‌روزرسانی شد.";
             
             $upgradeMessages = runDbUpgrades($pdo);
             if (!empty($upgradeMessages)) {
@@ -229,18 +446,38 @@ elseif ($step === 3) {
                 ('verification_iran_only', 'off'), ('test_config_usage_limit', '1'), ('notification_expire_status', 'off'),
                 ('notification_expire_days', '3'), ('notification_expire_gb', '1'), ('notification_inactive_status', 'off'),
                 ('notification_inactive_days', '30'),
-                ('renewal_status', 'off'), ('renewal_price_per_day', '1000'), ('renewal_price_per_gb', '2000'), ('payment_gateway_status', 'off'), ('zarinpal_merchant_id', '');");
+                ('renewal_status', 'off'), ('renewal_price_per_day', '1000'), ('renewal_price_per_gb', '2000'), 
+                ('payment_gateway_status', 'off'), ('zarinpal_merchant_id', ''), ('zarinpal_sandbox', 'off'),
+                ('idpay_enabled', 'off'), ('idpay_api_key', ''), ('idpay_sandbox', 'off'),
+                ('nextpay_enabled', 'off'), ('nextpay_api_key', ''), ('nextpay_sandbox', 'off'),
+                ('zibal_enabled', 'off'), ('zibal_merchant_id', ''), ('zibal_sandbox', 'off'),
+                ('newpayment_enabled', 'off'), ('newpayment_api_key', ''), ('newpayment_sandbox', 'off'),
+                ('aqayepardakht_enabled', 'off'), ('aqayepardakht_pin', ''), ('aqayepardakht_sandbox', 'off'),
+                ('affiliate_commission_type', 'percentage'), ('affiliate_commission_value', '10'), ('bot_username', ''),
+                ('config_prefix', ''), ('config_start_number', '0'), ('config_last_number', '0'),
+                ('log_group_id', ''), ('log_server_enabled', 'off'), ('log_error_enabled', 'on'),
+                ('log_purchase_enabled', 'on'), ('log_transaction_enabled', 'on'), ('log_user_new_enabled', 'off'),
+                ('log_user_ban_enabled', 'off'), ('log_admin_action_enabled', 'off'), ('log_payment_enabled', 'on'),
+                ('log_config_create_enabled', 'on'), ('log_config_delete_enabled', 'off'),
+                ('antispam_enabled', 'off'), ('antispam_max_actions', '10'), ('antispam_time_window', '5'),
+                ('antispam_mute_duration', '60'), ('antispam_message', '⚠️ شما به دلیل ارسال پیام‌های زیاد به صورت موقت مسدود شده‌اید. لطفاً صبر کنید.'),
+                ('speedtest_enabled', 'off'), ('userstats_enabled', 'off');");
             $successMessages[] = "✅ تنظیمات پیش‌فرض با موفقیت افزوده شد.";
             
-            $apiUrl = "https://api.telegram.org/bot$bot_token/setWebhook?secret_token=$secretToken&url=" . urlencode($botFileUrl);
-            $response = @file_get_contents($apiUrl);
-            $response_data = json_decode($response, true);
+            // تنظیم Webhook با secret_token
+            $webhook_result = setTelegramWebhook($bot_token, $botFileUrl, $secretToken);
             
-            if (!$response || !$response_data['ok']) {
-                $errors[] = 'خطا در ثبت وبهوک: ' . ($response_data['description'] ?? 'پاسخ نامعتبر از تلگرام. از صحت توکن مطمئن شوید.');
-            } else {
-                $successMessages[] = "✅ وبهوک با موفقیت در تلگرام ثبت شد.";
+            if ($webhook_result['success']) {
+                $successMessages[] = "✅ " . $webhook_result['message'] . ".";
                 $successMessages[] = "🎉 نصب/ارتقا با موفقیت به پایان رسید!";
+            } else {
+                $errors[] = $webhook_result['message'];
+                if (isset($webhook_result['http_code'])) {
+                    $errors[] = "HTTP Code: " . $webhook_result['http_code'];
+                }
+                if (isset($webhook_result['error_code'])) {
+                    $errors[] = "کد خطا: " . $webhook_result['error_code'];
+                }
             }
 
         } catch (PDOException $e) {
