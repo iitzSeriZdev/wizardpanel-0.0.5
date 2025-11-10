@@ -8,7 +8,6 @@
 
 /**
  * دریافت Cookie از پنل علی رضا (x-ui)
- * از cookie file استفاده می‌کند مثل نمونه کد کاربر
  */
 function getAlirezaCookie($server_id) {
     // ایجاد مسیر فایل cookie برای این سرور
@@ -342,10 +341,6 @@ function createAlirezaUser($plan, $chat_id, $plan_id) {
     ];
 }
 
-/**
- * به‌روزرسانی کاربر در پنل علی رضا
- * بر اساس نمونه کد کاربر که از updateClient استفاده می‌کند
- */
 function updateAlirezaUser($username, $server_id, $data) {
     $user_data = getAlirezaUser($username, $server_id);
     
@@ -407,13 +402,11 @@ function updateAlirezaUser($username, $server_id, $data) {
     // به‌روزرسانی settings
     $settings['clients'] = $clients;
     
-    // ساخت config برای به‌روزرسانی (مثل نمونه کد کاربر)
     $update_config = [
         'id' => (int)$inbound_id,
         'settings' => json_encode($settings, JSON_UNESCAPED_UNICODE)
     ];
     
-    // استفاده از endpoint updateClient مطابق نمونه کد کاربر
     $update_response = alirezaApiRequest("/xui/API/inbounds/updateClient/{$client_id}", $server_id, 'POST', $update_config);
     
     if (isset($update_response['error'])) {

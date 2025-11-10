@@ -1,9 +1,5 @@
 <?php
 
-/**
- * سیستم نام‌گذاری کانفیگ‌ها
- * امکان تنظیم prefix و شماره شروع برای نام کانفیگ‌ها
- */
 class ConfigNaming
 {
     private static ?ConfigNaming $instance = null;
@@ -22,34 +18,25 @@ class ConfigNaming
         return self::$instance;
     }
 
-    /**
-     * تولید نام کانفیگ جدید
-     */
     public function generateConfigName(): string
     {
         $settings = getSettings();
         $prefix = $settings['config_prefix'] ?? '';
         $startNumber = (int)($settings['config_start_number'] ?? 0);
         
-        // اگر prefix تنظیم نشده، از روش قدیمی استفاده می‌کنیم
         if (empty($prefix)) {
             return $this->generateDefaultName();
         }
         
-        // پاکسازی prefix از کاراکترهای غیرمجاز
         $prefix = preg_replace('/[^a-zA-Z0-9_.-]/', '', $prefix);
-        
-        // دریافت آخرین شماره استفاده شده
         $lastNumber = $this->getLastConfigNumber();
         
-        // اگر شماره شروع بیشتر از آخرین شماره است، از شماره شروع استفاده می‌کنیم
         if ($startNumber > $lastNumber) {
             $nextNumber = $startNumber;
         } else {
             $nextNumber = $lastNumber + 1;
         }
         
-        // ذخیره شماره جدید
         $this->saveLastConfigNumber($nextNumber);
         
         $configName = $prefix . $nextNumber;
@@ -63,9 +50,6 @@ class ConfigNaming
         return $configName;
     }
 
-    /**
-     * دریافت آخرین شماره استفاده شده
-     */
     private function getLastConfigNumber(): int
     {
         $settings = getSettings();
@@ -75,10 +59,8 @@ class ConfigNaming
             return 0;
         }
         
-        // پاکسازی prefix
         $prefix = preg_replace('/[^a-zA-Z0-9_.-]/', '', $prefix);
         
-        // جستجوی آخرین شماره در نام‌های کاربری موجود
         $stmt = pdo()->prepare("
             SELECT marzban_username 
             FROM services 
@@ -105,12 +87,8 @@ class ConfigNaming
         return $maxNumber;
     }
 
-    /**
-     * ذخیره آخرین شماره استفاده شده
-     */
     private function saveLastConfigNumber(int $number): void
     {
-        // شماره را در تنظیمات ذخیره می‌کنیم
         $stmt = pdo()->prepare("
             INSERT INTO settings (setting_key, setting_value) 
             VALUES ('config_last_number', ?) 
@@ -119,29 +97,20 @@ class ConfigNaming
         $stmt->execute([$number, $number]);
     }
 
-    /**
-     * تولید نام پیش‌فرض (روش قدیمی)
-     */
     private function generateDefaultName(): string
     {
-        // استفاده از timestamp برای ایجاد نام یکتا
         return 'user_' . time() . '_' . rand(1000, 9999);
     }
 
-    /**
-     * تنظیم prefix و شماره شروع
-     */
     public function setConfigNaming(string $prefix, int $startNumber): bool
     {
         try {
-            // پاکسازی prefix
             $prefix = preg_replace('/[^a-zA-Z0-9_.-]/', '', $prefix);
             
             if (empty($prefix)) {
                 return false;
             }
             
-            // ذخیره تنظیمات
             saveSettings([
                 'config_prefix' => $prefix,
                 'config_start_number' => (string)$startNumber
@@ -161,9 +130,6 @@ class ConfigNaming
         }
     }
 
-    /**
-     * دریافت تنظیمات نام‌گذاری
-     */
     public function getConfigNamingSettings(): array
     {
         $settings = getSettings();
@@ -174,9 +140,6 @@ class ConfigNaming
         ];
     }
 
-    /**
-     * ریست کردن شمارنده
-     */
     public function resetCounter(int $newStartNumber = 0): bool
     {
         try {

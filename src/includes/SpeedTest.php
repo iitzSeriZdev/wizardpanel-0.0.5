@@ -219,7 +219,7 @@ class SpeedTest
             $configsWithPing[] = $config;
         }
         
-        // مرتب‌سازی بر اساس پینگ
+        // مرتب‌سازی نتایج
         usort($configsWithPing, function($a, $b) {
             $pingA = $a['ping'] ?? 9999;
             $pingB = $b['ping'] ?? 9999;

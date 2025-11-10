@@ -13,7 +13,7 @@ require_once __DIR__ . '/includes/functions.php';
 // زیبال: trackId, success
 // newPayment: payment_id, status, order_id
 // آقای پرداخت: transid, invoice_id
-$authority = $_GET['Authority'] ?? $_GET['authority'] ?? $_GET['payment_id'] ?? $_GET['trackId'] ?? $_GET['trans_id'] ?? $_GET['transid'] ?? $_GET['id'] ?? $_POST['id'] ?? $_POST['payment_id'] ?? $_POST['transid'] ?? null;
+$authority = $_GET['Authority'] ?? $_GET['authority'] ?? $_GET['payment_id'] ?? $_GET['trackId'] ?? $_GET['trans_id'] ?? $_GET['transid'] ?? $_GET['id'] ?? $_GET['invoice_id'] ?? $_POST['id'] ?? $_POST['payment_id'] ?? $_POST['transid'] ?? $_POST['invoice_id'] ?? null;
 $status = $_GET['Status'] ?? $_GET['status'] ?? $_POST['status'] ?? null;
 
 // اگر authority خالی است، سعی می‌کنیم از status برای تشخیص استفاده کنیم
@@ -31,16 +31,19 @@ if (empty($authority)) {
     elseif (isset($_POST['trans_id']) && !empty($_POST['trans_id'])) {
         $authority = $_POST['trans_id'];
     }
-    // برای آقای پرداخت، ممکن است transid در POST باشد
+    // برای آقای پرداخت، ممکن است transid یا invoice_id در POST باشد
     elseif (isset($_POST['transid']) && !empty($_POST['transid'])) {
         $authority = $_POST['transid'];
+    }
+    elseif (isset($_POST['invoice_id']) && !empty($_POST['invoice_id'])) {
+        $authority = $_POST['invoice_id'];
     }
 }
 
 if (empty($authority)) {
     // اگر هنوز authority پیدا نشد، سعی می‌کنیم از تمام پارامترها استفاده کنیم
     $allParams = array_merge($_GET, $_POST);
-    foreach (['Authority', 'authority', 'payment_id', 'trackId', 'trans_id', 'transid', 'id'] as $key) {
+    foreach (['Authority', 'authority', 'payment_id', 'trackId', 'trans_id', 'transid', 'id', 'invoice_id'] as $key) {
         if (isset($allParams[$key]) && !empty($allParams[$key])) {
             $authority = $allParams[$key];
             break;

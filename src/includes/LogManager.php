@@ -1,9 +1,5 @@
 <?php
 
-/**
- * سیستم مدیریت لاگ‌ها با ارسال به گروه خصوصی
- * امکان فعال/غیرفعال کردن انواع مختلف لاگ‌ها
- */
 class LogManager
 {
     private static ?LogManager $instance = null;
@@ -31,17 +27,12 @@ class LogManager
         return self::$instance;
     }
 
-    /**
-     * بارگذاری تنظیمات لاگ‌ها
-     */
     private function loadSettings(): void
     {
         $settings = getSettings();
         
-        // آیدی گروه لاگ‌ها
         $this->logGroupId = !empty($settings['log_group_id']) ? (int)$settings['log_group_id'] : null;
         
-        // انواع لاگ‌ها و وضعیت فعال/غیرفعال بودن آنها
         $this->logTypes = [
             'server' => ($settings['log_server_enabled'] ?? 'off') === 'on',
             'error' => ($settings['log_error_enabled'] ?? 'on') === 'on',
@@ -56,16 +47,11 @@ class LogManager
         ];
     }
 
-    /**
-     * ارسال لاگ به گروه خصوصی
-     */
     private function sendToLogGroup(string $message, string $parseMode = 'HTML'): bool
     {
-        // به‌روزرسانی تنظیمات قبل از ارسال (برای اطمینان از اینکه logGroupId به‌روز است)
         $this->loadSettings();
         
         if (!$this->logGroupId) {
-            // اگر logGroupId تنظیم نشده، لاگ را در فایل ذخیره می‌کنیم
             if (isset($this->logger) && $this->logger) {
                 $this->logger->warning("Log group ID not configured, skipping log send to Telegram group");
             }
@@ -73,7 +59,6 @@ class LogManager
         }
 
         try {
-            // بررسی اینکه آیا تابع apiRequest موجود است
             if (!function_exists('apiRequest')) {
                 if (isset($this->logger) && $this->logger) {
                     $this->logger->error("apiRequest function not found");
@@ -81,8 +66,6 @@ class LogManager
                 return false;
             }
             
-            // برای ارسال به گروه، باید مستقیماً از apiRequest استفاده کنیم
-            // تا از مشکل editMessageText جلوگیری کنیم
             $params = [
                 'chat_id' => $this->logGroupId,
                 'text' => $message,
@@ -111,7 +94,6 @@ class LogManager
                         'response' => $decoded
                     ]);
                 }
-                // همچنین لاگ را در error_log ذخیره می‌کنیم
                 error_log("LogManager: Failed to send log to group {$this->logGroupId}: {$error_msg}");
                 return false;
             }
@@ -123,7 +105,6 @@ class LogManager
                     'trace' => $e->getTraceAsString()
                 ]);
             }
-            // همچنین لاگ را در error_log ذخیره می‌کنیم
             error_log("LogManager: Exception while sending log to group {$this->logGroupId}: " . $e->getMessage());
             return false;
         } catch (Throwable $e) {
@@ -138,9 +119,6 @@ class LogManager
         }
     }
 
-    /**
-     * لاگ سرور (خطاهای سرور، مشکلات پنل و...)
-     */
     public function logServer(string $message, array $context = []): void
     {
         if (!$this->logTypes['server']) {
@@ -160,9 +138,6 @@ class LogManager
         $this->sendToLogGroup($logMessage);
     }
 
-    /**
-     * لاگ خطاها
-     */
     public function logError(string $message, array $context = []): void
     {
         if (!$this->logTypes['error']) {
@@ -183,9 +158,6 @@ class LogManager
         $this->sendToLogGroup($logMessage);
     }
 
-    /**
-     * لاگ خریدها
-     */
     public function logPurchase(int $userId, int $planId, float $amount, string $planName): void
     {
         if (!$this->logTypes['purchase']) {
@@ -213,9 +185,6 @@ class LogManager
         $this->sendToLogGroup($logMessage);
     }
 
-    /**
-     * لاگ تراکنش‌ها
-     */
     public function logTransaction(int $userId, float $amount, string $type, array $details = []): void
     {
         if (!$this->logTypes['transaction']) {
@@ -254,9 +223,6 @@ class LogManager
         $this->sendToLogGroup($logMessage);
     }
 
-    /**
-     * لاگ کاربران جدید
-     */
     public function logNewUser(int $userId, string $userName): void
     {
         if (!$this->logTypes['user_new']) {
@@ -275,9 +241,6 @@ class LogManager
         $this->sendToLogGroup($logMessage);
     }
 
-    /**
-     * لاگ مسدود کردن کاربر
-     */
     public function logUserBan(int $userId, string $userName, string $reason = ''): void
     {
         if (!$this->logTypes['user_ban']) {
@@ -299,9 +262,6 @@ class LogManager
         $this->sendToLogGroup($logMessage);
     }
 
-    /**
-     * لاگ اقدامات ادمین
-     */
     public function logAdminAction(int $adminId, string $action, array $details = []): void
     {
         if (!$this->logTypes['admin_action']) {
@@ -330,9 +290,6 @@ class LogManager
         $this->sendToLogGroup($logMessage);
     }
 
-    /**
-     * لاگ پرداخت‌ها
-     */
     public function logPayment(int $userId, float $amount, string $gateway, string $status, array $details = []): void
     {
         if (!$this->logTypes['payment']) {
@@ -371,9 +328,6 @@ class LogManager
         $this->sendToLogGroup($logMessage);
     }
 
-    /**
-     * لاگ ایجاد کانفیگ
-     */
     public function logConfigCreate(int $userId, string $configName, int $planId): void
     {
         if (!$this->logTypes['config_create']) {
@@ -400,9 +354,6 @@ class LogManager
         $this->sendToLogGroup($logMessage);
     }
 
-    /**
-     * لاگ حذف کانفیگ
-     */
     public function logConfigDelete(int $userId, string $configName, string $reason = ''): void
     {
         if (!$this->logTypes['config_delete']) {
@@ -431,9 +382,6 @@ class LogManager
         $this->sendToLogGroup($logMessage);
     }
 
-    /**
-     * تنظیم آیدی گروه لاگ‌ها
-     */
     public function setLogGroupId(int $groupId): bool
     {
         try {
@@ -448,9 +396,6 @@ class LogManager
         }
     }
 
-    /**
-     * فعال/غیرفعال کردن نوع لاگ
-     */
     public function toggleLogType(string $logType, bool $enabled): bool
     {
         if (!isset($this->logTypes[$logType])) {
@@ -470,9 +415,6 @@ class LogManager
         }
     }
 
-    /**
-     * دریافت تنظیمات لاگ‌ها
-     */
     public function getLogSettings(): array
     {
         return [
@@ -481,17 +423,11 @@ class LogManager
         ];
     }
 
-    /**
-     * دریافت آیدی گروه لاگ‌ها
-     */
     public function getLogGroupId(): ?int
     {
         return $this->logGroupId;
     }
 
-    /**
-     * بررسی فعال بودن نوع لاگ
-     */
     public function isLogTypeEnabled(string $logType): bool
     {
         return $this->logTypes[$logType] ?? false;

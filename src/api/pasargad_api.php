@@ -1,13 +1,7 @@
 <?php
 
 /**
- * API Integration برای پنل PasarGuard (PasarGuard VPN Panel)
- * پشتیبانی از ایجاد، حذف و مدیریت کاربران
- * مستندات: https://docs.pasarguard.org/fa/node/api/
- */
-
-/**
- * درخواست به API پاسارگاد
+ * API Integration برای پنل PasarGuard
  */
 function pasargadApiRequest($endpoint, $server_id, $method = 'GET', $data = []) {
     $stmt = pdo()->prepare("SELECT * FROM servers WHERE id = ?");
@@ -19,24 +13,19 @@ function pasargadApiRequest($endpoint, $server_id, $method = 'GET', $data = []) 
         return ['error' => 'Pasargad server is not configured.', 'details' => "Server ID {$server_id} not found"];
     }
 
-    // ساخت URL کامل
     $base_url = rtrim($server_info['url'], '/');
     
-    // بررسی اینکه URL سرور معتبر است
     if (empty($base_url)) {
         error_log("Pasargad: Empty server URL for server ID {$server_id}");
         return ['error' => 'Server URL is empty', 'details' => "Server URL is not configured for server ID {$server_id}"];
     }
     
-    // اگر URL با http:// یا https:// شروع نمی‌شود، اضافه کن
     if (!preg_match('/^https?:\/\//', $base_url)) {
         $base_url = 'https://' . $base_url;
         error_log("Pasargad: Added https:// prefix to server URL: {$base_url}");
     }
     
     $url = $base_url . $endpoint;
-    
-    // لاگ URL برای دیباگ
     error_log("Pasargad: Request URL: {$url} (Method: {$method})");
     
     $username = $server_info['username'] ?? '';
@@ -118,9 +107,7 @@ function pasargadApiRequest($endpoint, $server_id, $method = 'GET', $data = []) 
         error_log("Pasargad API: JSON decode error for server {$server_id}: " . json_last_error_msg());
         error_log("Pasargad API: Raw response (first 500 chars): " . substr($response, 0, 500));
         
-        // اگر HTTP code موفق است اما JSON decode failed، ممکن است پاسخ خالی یا متن ساده باشد
         if ($httpCode >= 200 && $httpCode < 300) {
-            // برای DELETE و PUT، پاسخ خالی ممکن است موفقیت‌آمیز باشد
             if (in_array($method, ['DELETE', 'PUT'])) {
                 error_log("Pasargad API: HTTP code is successful but JSON decode failed for {$method} - Assuming success");
                 return ['success' => true, 'http_code' => $httpCode, 'raw_response' => substr($response, 0, 200)];
@@ -131,8 +118,6 @@ function pasargadApiRequest($endpoint, $server_id, $method = 'GET', $data = []) 
     }
     
     if ($httpCode >= 200 && $httpCode < 300) {
-        // اگر پاسخ خالی است اما HTTP code موفق است، ممکن است عملیات موفق باشد
-        // این معمولاً برای DELETE و PUT رخ می‌دهد
         if (empty($decoded)) {
             error_log("Pasargad API: Empty decoded response but HTTP {$httpCode} - Endpoint: {$endpoint} - Method: {$method} - Assuming success");
             return ['success' => true, 'http_code' => $httpCode];
@@ -184,8 +169,6 @@ function getPasargadToken($server_id, $username, $password) {
         error_log("Pasargad: Added https:// prefix to server URL for token: {$server_url}");
     }
     
-    // endpoint احراز هویت - ممکن است `/api/auth/login` یا `/api/admin/token` باشد
-    // بر اساس مستندات پاسارگاد: https://docs.pasarguard.org/fa/node/api/
     $login_endpoints = [
         '/api/auth/login',
         '/api/admin/token',
@@ -382,10 +365,6 @@ function getPasargadUser($username, $server_id) {
     return false;
 }
 
-/**
- * ایجاد کاربر جدید در پنل پاسارگاد
- * بر اساس نمونه کد مرزبان - استفاده از ساختار ساده و مستقیم
- */
 function createPasargadUser($plan, $chat_id, $plan_id) {
     // بررسی اینکه plan معتبر است
     if (empty($plan) || !is_array($plan)) {
@@ -441,22 +420,19 @@ function createPasargadUser($plan, $chat_id, $plan_id) {
         $user_username = substr($user_username, 0, 50);
     }
     
-    // محاسبه data_limit (bytes) - بر اساس نمونه کد پاسارگاد
     $volume_gb = isset($plan['volume_gb']) ? (float)$plan['volume_gb'] : 0;
-    $data_limit = 0; // 0 به معنای نامحدود
+    $data_limit = 0;
     if ($volume_gb > 0) {
-        $data_limit = (int)($volume_gb * 1024 * 1024 * 1024); // تبدیل GB به bytes
+        $data_limit = (int)($volume_gb * 1024 * 1024 * 1024);
     }
     
-    // محاسبه expire (timestamp یا null) - بر اساس نمونه کد پاسارگاد
     $duration_days = isset($plan['duration_days']) ? (int)$plan['duration_days'] : 0;
     $expire = null;
     if ($duration_days > 0) {
-        $expire = time() + ($duration_days * 24 * 60 * 60); // timestamp
+        $expire = time() + ($duration_days * 24 * 60 * 60);
     }
     
-    // تولید UUID برای proxy_settings
-    require_once __DIR__ . '/sanaei_api.php'; // برای استفاده از generateUUID
+    require_once __DIR__ . '/sanaei_api.php';
     if (!function_exists('generateUUID')) {
         error_log("Pasargad: generateUUID function not found");
         return ['error' => 'UUID generation function not available', 'details' => 'generateUUID function is required'];
@@ -480,7 +456,6 @@ function createPasargadUser($plan, $chat_id, $plan_id) {
     $trojan_password = generateRandomString(16);
     $shadowsocks_password = generateRandomString(16);
     
-    // ساختار داده کاربر - بر اساس نمونه کد پاسارگاد
     $userData = [
         'username' => $user_username,
         'status' => $plan['status'] ?? 'active',
@@ -506,7 +481,6 @@ function createPasargadUser($plan, $chat_id, $plan_id) {
         ]
     ];
     
-    // اگر expire null است، از payload حذف کن (بر اساس نمونه که expire می‌تواند null باشد)
     if ($expire === null) {
         unset($userData['expire']);
     }
@@ -570,7 +544,6 @@ function createPasargadUser($plan, $chat_id, $plan_id) {
         $url = $server_url . $endpoint;
         error_log("Pasargad: Trying endpoint: {$url}");
         
-        // استفاده از cURL برای ارسال درخواست POST به API - مثل نمونه کد
         $ch = curl_init($url);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_POST, true);
@@ -596,7 +569,6 @@ function createPasargadUser($plan, $chat_id, $plan_id) {
             continue;
         }
         
-        // بررسی نتیجه - مثل نمونه کد
         if ($httpCode === 200 || $httpCode === 201) {
             error_log("Pasargad: User created successfully using endpoint: {$endpoint} - HTTP Code: {$httpCode}");
             $successful_endpoint = $endpoint;

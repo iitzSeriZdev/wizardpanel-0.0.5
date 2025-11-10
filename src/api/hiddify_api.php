@@ -3,7 +3,6 @@
 /**
  * API Integration برای پنل Hiddify
  * پشتیبانی از ایجاد، حذف و مدیریت کاربران
- * مستندات: https://www.hiddify.com/
  */
 
 function hiddifyApiRequest($endpoint, $server_id, $method = 'GET', $data = []) {

@@ -1,7 +1,6 @@
 <?php
 /**
  * Webhook handler for NOWPayments
- * بر اساس کد نمونه nowpayment.php
  */
 
 require_once __DIR__ . '/includes/config.php';

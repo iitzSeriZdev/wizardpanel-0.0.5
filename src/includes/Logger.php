@@ -1,10 +1,5 @@
 <?php
 
-/**
- * سیستم لاگ‌گیری پیشرفته برای ربات تلگرام
- * 
- * این کلاس امکان لاگ‌گیری با سطوح مختلف، چرخش فایل‌ها و فرمت‌های مختلف را فراهم می‌کند.
- */
 class Logger
 {
     private const LOG_LEVELS = [
@@ -41,9 +36,6 @@ class Logger
         return self::$instance;
     }
 
-    /**
-     * لاگ کردن پیام با سطح مشخص
-     */
     public function log(string $level, string $message, array $context = []): void
     {
         if (!isset(self::LOG_LEVELS[$level]) || 
@@ -59,10 +51,8 @@ class Logger
 
         file_put_contents($logFile, $logMessage, FILE_APPEND | LOCK_EX);
 
-        // چرخش فایل در صورت بزرگ شدن
         $this->rotateIfNeeded($logFile);
 
-        // برای خطاهای بحرانی، ارسال به error_log هم
         if ($level === 'CRITICAL' || $level === 'ERROR') {
             error_log($logMessage);
         }
@@ -93,16 +83,12 @@ class Logger
         $this->log('CRITICAL', $message, $context);
     }
 
-    /**
-     * چرخش فایل لاگ در صورت بزرگ شدن
-     */
     private function rotateIfNeeded(string $logFile): void
     {
         if (!file_exists($logFile) || filesize($logFile) < $this->maxFileSize) {
             return;
         }
 
-        // پیدا کردن آخرین شماره فایل
         $baseName = basename($logFile, '.log');
         $dir = dirname($logFile);
         $maxNum = 0;
@@ -114,17 +100,12 @@ class Logger
             }
         }
 
-        // تغییر نام فایل فعلی
         $newNum = $maxNum + 1;
         rename($logFile, $dir . '/' . $baseName . '_' . $newNum . '.log');
 
-        // حذف فایل‌های قدیمی
         $this->cleanOldLogs($baseName, $dir);
     }
 
-    /**
-     * حذف فایل‌های قدیمی لاگ
-     */
     private function cleanOldLogs(string $baseName, string $dir): void
     {
         $files = glob($dir . '/' . $baseName . '_*.log');
@@ -139,26 +120,17 @@ class Logger
         }
     }
 
-    /**
-     * لاگ کردن تراکنش‌های مالی
-     */
     public function logTransaction(int $userId, float $amount, string $type, array $details = []): void
     {
         $this->info("Transaction: User {$userId} | Amount: {$amount} | Type: {$type}", $details);
     }
 
-    /**
-     * لاگ کردن فعالیت‌های ادمین
-     */
     public function logAdminAction(int $adminId, string $action, array $details = []): void
     {
         $this->info("Admin Action: Admin {$adminId} | Action: {$action}", $details);
     }
 }
 
-/**
- * تابع کمکی برای دسترسی سریع به Logger
- */
 function logger(): Logger
 {
     return Logger::getInstance();

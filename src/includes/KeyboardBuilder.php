@@ -1,9 +1,5 @@
 <?php
 
-/**
- * کلاس ساخت کیبورد برای تلگرام
- * این کلاس ساخت کیبوردهای inline و reply را ساده‌تر می‌کند
- */
 class KeyboardBuilder
 {
     private array $buttons = [];
@@ -12,9 +8,6 @@ class KeyboardBuilder
     private bool $oneTimeKeyboard = false;
     private bool $selective = false;
 
-    /**
-     * ساخت یک کیبورد جدید
-     */
     public static function create(bool $inline = false): self
     {
         $builder = new self();
@@ -22,18 +15,12 @@ class KeyboardBuilder
         return $builder;
     }
 
-    /**
-     * افزودن یک ردیف دکمه
-     */
     public function addRow(array $buttons): self
     {
         $this->buttons[] = $buttons;
         return $this;
     }
 
-    /**
-     * افزودن یک دکمه
-     */
     public function addButton(string $text, string $callbackData = null, string $url = null, string $switchInlineQuery = null): self
     {
         if ($this->isInline) {
@@ -47,7 +34,6 @@ class KeyboardBuilder
                 $button['callback_data'] = $callbackData ?? $text;
             }
             
-            // اگر آخرین ردیف وجود ندارد یا خالی است، یک ردیف جدید اضافه کن
             if (empty($this->buttons) || empty(end($this->buttons))) {
                 $this->buttons[] = [];
             }
@@ -55,7 +41,6 @@ class KeyboardBuilder
             $lastIndex = count($this->buttons) - 1;
             $this->buttons[$lastIndex][] = $button;
         } else {
-            // Reply keyboard
             if (empty($this->buttons) || empty(end($this->buttons))) {
                 $this->buttons[] = [];
             }
@@ -66,17 +51,11 @@ class KeyboardBuilder
         return $this;
     }
 
-    /**
-     * افزودن دکمه بازگشت
-     */
     public function addBackButton(string $text = '◀️ بازگشت به منوی اصلی', string $callbackData = 'back_to_main_menu'): self
     {
         return $this->addRow([$this->createButton($text, $callbackData)]);
     }
 
-    /**
-     * ساخت دکمه
-     */
     private function createButton(string $text, string $callbackData = null, string $url = null): array
     {
         $button = ['text' => $text];
@@ -92,9 +71,6 @@ class KeyboardBuilder
         return $button;
     }
 
-    /**
-     * افزودن دکمه‌های شبکه‌ای (Grid)
-     */
     public function addGrid(array $buttons, int $columns = 2): self
     {
         $rows = array_chunk($buttons, $columns);
@@ -104,36 +80,24 @@ class KeyboardBuilder
         return $this;
     }
 
-    /**
-     * تنظیم resize keyboard
-     */
     public function setResizeKeyboard(bool $resize): self
     {
         $this->resizeKeyboard = $resize;
         return $this;
     }
 
-    /**
-     * تنظیم one time keyboard
-     */
     public function setOneTimeKeyboard(bool $oneTime): self
     {
         $this->oneTimeKeyboard = $oneTime;
         return $this;
     }
 
-    /**
-     * تنظیم selective
-     */
     public function setSelective(bool $selective): self
     {
         $this->selective = $selective;
         return $this;
     }
 
-    /**
-     * دریافت کیبورد نهایی
-     */
     public function build(): array
     {
         if ($this->isInline) {
@@ -148,25 +112,16 @@ class KeyboardBuilder
         }
     }
 
-    /**
-     * دریافت JSON کیبورد
-     */
     public function toJson(): string
     {
         return json_encode($this->build(), JSON_UNESCAPED_UNICODE);
     }
 
-    /**
-     * حذف کیبورد
-     */
     public static function remove(): array
     {
         return ['remove_keyboard' => true];
     }
 
-    /**
-     * ساخت کیبورد ساده با یک ردیف
-     */
     public static function simple(array $buttons, bool $inline = false): array
     {
         $builder = self::create($inline);
@@ -174,9 +129,6 @@ class KeyboardBuilder
         return $builder->build();
     }
 
-    /**
-     * ساخت کیبورد شبکه‌ای
-     */
     public static function grid(array $buttons, int $columns = 2, bool $inline = false): array
     {
         $builder = self::create($inline);

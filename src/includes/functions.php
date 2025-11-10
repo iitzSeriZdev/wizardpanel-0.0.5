@@ -1,6 +1,5 @@
 <?php
 
-// فراخوانی کلاس‌های جدید
 require_once __DIR__ . '/Logger.php';
 require_once __DIR__ . '/Security.php';
 require_once __DIR__ . '/Cache.php';
@@ -14,7 +13,6 @@ require_once __DIR__ . '/ConfigNaming.php';
 require_once __DIR__ . '/LogManager.php';
 require_once __DIR__ . '/TicketSystem.php';
 
-// فراخوانی تمام فایل‌های API در ابتدای فایل
 require_once __DIR__ . '/../api/marzban_api.php';
 require_once __DIR__ . '/../api/sanaei_api.php';
 require_once __DIR__ . '/../api/marzneshin_api.php';
@@ -23,10 +21,6 @@ require_once __DIR__ . '/../api/alireza_api.php';
 require_once __DIR__ . '/../api/pasargad_api.php';
 require_once __DIR__ . '/../api/txui_api.php';
 require_once __DIR__ . '/AntiSpam.php';
-
-// =====================================================================
-// ---                 توابع اصلی API تلگرام                         ---
-// =====================================================================
 
 
 function handleKeyboard($keyboard, $handleMainMenu = false) {
@@ -126,9 +120,7 @@ function sendMessage($chat_id, $text, $keyboard = null, $handleMainMenu = false)
         $result = apiRequest('editMessageText', $params);
         $decoded_result = json_decode($result, true);
         
-        // اگر editMessageText با خطا مواجه شد، از sendMessage استفاده کن
         if (!$decoded_result || !$decoded_result['ok']) {
-            // اگر خطا مربوط به "message to edit not found" یا خطای 400 است، از sendMessage استفاده کن
             if (isset($decoded_result['error_code']) && ($decoded_result['error_code'] == 400 || strpos($decoded_result['description'] ?? '', 'message to edit not found') !== false)) {
             unset($params['message_id']);
             return apiRequest('sendMessage', $params);
@@ -160,9 +152,7 @@ function editMessageText($chat_id, $message_id, $text, $keyboard = null) {
         $result = apiRequest('editMessageText', $params);
         $decoded_result = json_decode($result, true);
         
-        // اگر editMessageText با خطا مواجه شد (مثلاً message not found)، از sendMessage استفاده کن
         if (!$decoded_result || !$decoded_result['ok']) {
-            // اگر خطا مربوط به "message to edit not found" است، از sendMessage استفاده کن
             if (isset($decoded_result['error_code']) && $decoded_result['error_code'] == 400) {
                 unset($params['message_id']);
                 return apiRequest('sendMessage', $params);
@@ -193,7 +183,6 @@ function apiRequest($method, $params = []) {
     global $apiRequest;
     $apiRequest = true;
 
-    // استفاده از ApiClient جدید اگر در دسترس باشد
     if (class_exists('ApiClient')) {
         try {
             $client = ApiClient::getInstance();
@@ -229,9 +218,6 @@ function apiRequest($method, $params = []) {
     return $response;
 }
 
-// =====================================================================
-// ---           توابع مدیریت داده (بازنویسی شده برای MySQL)         ---
-// =====================================================================
 
 // --- مدیریت کاربران ---
 function getUserData($chat_id, $first_name = 'کاربر') {
@@ -1285,7 +1271,7 @@ function showPlansForCategoryAndServer($chat_id, $category_id, $server_id, $mess
     
     // بررسی نوع پنل و نمایش "(به زودی)" برای پنل‌های جدید
     $panel_status = '';
-    if (in_array($server_type, ['pasargad', 'txui'])) {
+    if (in_array($server_type, ['pasargad', 'rebecca'])) {
         $panel_status = ' (به زودی)';
     }
 

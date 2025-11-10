@@ -1,7 +1,6 @@
 <?php
 /**
- * فایل تنظیم Webhook با SECRET_TOKEN
- * این فایل را یکبار اجرا کنید تا webhook تنظیم شود
+ * تنظیم Webhook با SECRET_TOKEN
  */
 
 require_once __DIR__ . '/includes/config.php';

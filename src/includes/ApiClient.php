@@ -1,9 +1,5 @@
 <?php
 
-/**
- * کلاس بهبود یافته برای ارتباط با API تلگرام
- * شامل Retry Logic، Rate Limiting و Error Handling بهتر
- */
 class ApiClient
 {
     private static ?ApiClient $instance = null;
@@ -17,7 +13,7 @@ class ApiClient
     {
         $this->baseUrl = 'https://api.telegram.org/bot' . BOT_TOKEN . '/';
         $this->maxRetries = 3;
-        $this->retryDelay = 1; // seconds
+        $this->retryDelay = 1;
         $this->logger = Logger::getInstance();
     }
 
@@ -29,14 +25,10 @@ class ApiClient
         return self::$instance;
     }
 
-    /**
-     * ارسال درخواست به API تلگرام
-     */
     public function request(string $method, array $params = [], int $retryCount = 0): array
     {
         $url = $this->baseUrl . $method;
         
-        // بررسی Rate Limit
         if (!$this->checkRateLimit($method)) {
             $this->logger->warning("Rate limit exceeded for method: {$method}");
             sleep($this->retryDelay);
@@ -65,7 +57,6 @@ class ApiClient
                 'error' => $error
             ]);
             
-            // Retry on network errors
             if ($retryCount < $this->maxRetries) {
                 sleep($this->retryDelay * ($retryCount + 1));
                 return $this->request($method, $params, $retryCount + 1);
@@ -93,12 +84,10 @@ class ApiClient
             return ['ok' => false, 'error' => 'Invalid JSON response'];
         }
 
-        // Handle Telegram API errors
         if (!$data['ok']) {
             $errorCode = $data['error_code'] ?? 0;
             $errorDescription = $data['description'] ?? 'Unknown error';
             
-            // Retry on specific errors
             if (in_array($errorCode, [429, 500, 502, 503, 504]) && $retryCount < $this->maxRetries) {
                 $retryAfter = $data['parameters']['retry_after'] ?? $this->retryDelay * ($retryCount + 1);
                 $this->logger->warning("Retrying API request", [
@@ -121,9 +110,6 @@ class ApiClient
         return $data;
     }
 
-    /**
-     * بررسی Rate Limit
-     */
     private function checkRateLimit(string $method): bool
     {
         $key = 'api_rate_limit_' . $method;
@@ -137,7 +123,6 @@ class ApiClient
             $this->rateLimits[$key] = ['count' => 0, 'reset_time' => $now + 60];
         }
         
-        // محدودیت: 30 درخواست در دقیقه
         if ($this->rateLimits[$key]['count'] >= 30) {
             return false;
         }
@@ -146,9 +131,6 @@ class ApiClient
         return true;
     }
 
-    /**
-     * ارسال پیام
-     */
     public function sendMessage(int $chatId, string $text, array $keyboard = null, string $parseMode = 'HTML'): array
     {
         $params = [
@@ -164,9 +146,6 @@ class ApiClient
         return $this->request('sendMessage', $params);
     }
 
-    /**
-     * ویرایش پیام
-     */
     public function editMessageText(int $chatId, int $messageId, string $text, array $keyboard = null): array
     {
         $params = [
@@ -183,9 +162,6 @@ class ApiClient
         return $this->request('editMessageText', $params);
     }
 
-    /**
-     * حذف پیام
-     */
     public function deleteMessage(int $chatId, int $messageId): array
     {
         return $this->request('deleteMessage', [
@@ -194,9 +170,6 @@ class ApiClient
         ]);
     }
 
-    /**
-     * پاسخ به Callback Query
-     */
     public function answerCallbackQuery(string $callbackQueryId, string $text = null, bool $showAlert = false): array
     {
         $params = ['callback_query_id' => $callbackQueryId];
@@ -212,9 +185,6 @@ class ApiClient
         return $this->request('answerCallbackQuery', $params);
     }
 
-    /**
-     * ارسال عکس
-     */
     public function sendPhoto(int $chatId, string $photo, string $caption = null, array $keyboard = null): array
     {
         $params = [
@@ -234,17 +204,11 @@ class ApiClient
         return $this->request('sendPhoto', $params);
     }
 
-    /**
-     * دریافت اطلاعات چت
-     */
     public function getChat(int $chatId): array
     {
         return $this->request('getChat', ['chat_id' => $chatId]);
     }
 
-    /**
-     * دریافت اطلاعات عضو چت
-     */
     public function getChatMember(string $chatId, int $userId): array
     {
         return $this->request('getChatMember', [

@@ -2,11 +2,7 @@
 
 /**
  * API Integration برای پنل TX-UI
- * پشتیبانی از ایجاد، حذف و مدیریت کاربران
- * این پنل مشابه Sanaei (3X-UI) است و از cookie-based authentication استفاده می‌کند
  */
-
-// --- توابع پایه  ---
 
 function getTxuiCookie($server_id) {
     $cache_key = 'txui_cookie_' . $server_id;
@@ -111,7 +107,7 @@ function createTxuiUser($plan, $chat_id, $plan_id) {
     if(!$server_info) return false;
 
     $base_sub_url = !empty($server_info['sub_host']) ? rtrim($server_info['sub_host'], '/') : rtrim($server_info['url'], '/');
-    require_once __DIR__ . '/sanaei_api.php'; // برای استفاده از generateUUID
+    require_once __DIR__ . '/sanaei_api.php';
     $uuid = generateUUID();
     $email = $plan['full_username'];
     $subId = generateUUID(16);
@@ -121,11 +117,9 @@ function createTxuiUser($plan, $chat_id, $plan_id) {
         $expire_time = (time() + $plan['duration_days'] * 86400) * 1000;
     }
     
-    // پشتیبانی از حجم نامحدود (اگر volume_gb صفر یا null باشد)
-    // توجه: در TX-UI، totalGB باید به GB باشد نه bytes (0 به معنای نامحدود)
-    $totalGB = 0; // 0 به معنای نامحدود در TX-UI
+    $totalGB = 0;
     if (!empty($plan['volume_gb']) && $plan['volume_gb'] > 0) {
-        $totalGB = $plan['volume_gb']; // TX-UI از GB استفاده می‌کند، نه bytes
+        $totalGB = $plan['volume_gb'];
     }
     
     $client_settings = [ "id" => $uuid, "email" => $email, "totalGB" => $totalGB, "expiryTime" => $expire_time, "enable" => true, "tgId" => (string)$chat_id, "subId" => $subId ];
